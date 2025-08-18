@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../models/entry.dart';
 import '../services/db_service.dart';
 import '../widgets/journal_card.dart';
+import '../services/speech_service.dart';
 
 class JournalScreen extends StatefulWidget {
   const JournalScreen({super.key});
@@ -15,6 +16,7 @@ class JournalScreen extends StatefulWidget {
 class _JournalScreenState extends State<JournalScreen> {
   String _selectedJournal = 'all';
   Future<List<JournalEntry>>? _future;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -30,6 +32,26 @@ class _JournalScreenState extends State<JournalScreen> {
         _future = DbService.instance.fetchEntriesByJournal(_selectedJournal);
       }
     });
+  }
+
+  String _detectJournal(String text) {
+    final String lower = text.toLowerCase();
+    if (lower.contains('weight')) return 'weight';
+    if (lower.contains('mood')) return 'mood';
+    return 'default';
+  }
+
+  Future<void> _addViaVoice() async {
+    setState(() => _busy = true);
+    try {
+      final String text = await speechService.transcribeSpeech();
+      if (text.trim().isEmpty) return;
+      final String journal = _selectedJournal == 'all' ? _detectJournal(text) : _selectedJournal;
+      await DbService.instance.addEntry(journalName: journal, text: text.trim());
+      _load();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -94,9 +116,12 @@ class _JournalScreenState extends State<JournalScreen> {
           )
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Icon(Icons.arrow_back),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _busy ? null : _addViaVoice,
+        icon: _busy
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.mic),
+        label: const Text('Add via voice'),
       ),
     );
   }

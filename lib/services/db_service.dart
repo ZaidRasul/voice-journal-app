@@ -12,8 +12,7 @@ part 'db_service.g.dart';
 class Entries extends Table {
   IntColumn get id => integer().autoIncrement()();
   TextColumn get journalName => text()();
-  @override
-  TextColumn get text => text()();
+  TextColumn get content => text()();
   DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 }
 
@@ -24,10 +23,10 @@ class AppDatabase extends _$AppDatabase {
   @override
   int get schemaVersion => 1;
 
-  Future<int> addEntry({required String journalName, required String text, DateTime? createdAt}) {
+  Future<int> addEntry({required String journalName, required String content, DateTime? createdAt}) {
     return into(entries).insert(EntriesCompanion.insert(
       journalName: journalName,
-      text: text,
+      content: content,
       createdAt: Value(createdAt ?? DateTime.now()),
     ));
   }
@@ -63,13 +62,13 @@ class DbService {
   final AppDatabase _db = AppDatabase();
 
   Future<JournalEntry> addEntry({required String journalName, required String text, DateTime? createdAt}) async {
-    final int id = await _db.addEntry(journalName: journalName, text: text, createdAt: createdAt);
+    final int id = await _db.addEntry(journalName: journalName, content: text, createdAt: createdAt);
     final List<Entry> rows = await _db.fetchEntriesByJournalRows(journalName);
     final Entry row = rows.firstWhere((e) => e.id == id);
     return JournalEntry(
       id: row.id,
       journalName: row.journalName,
-      text: row.text,
+      text: row.content,
       createdAt: row.createdAt,
     );
   }
@@ -80,7 +79,7 @@ class DbService {
         .map((row) => JournalEntry(
               id: row.id,
               journalName: row.journalName,
-              text: row.text,
+              text: row.content,
               createdAt: row.createdAt,
             ))
         .toList();
@@ -92,7 +91,7 @@ class DbService {
         .map((row) => JournalEntry(
               id: row.id,
               journalName: row.journalName,
-              text: row.text,
+              text: row.content,
               createdAt: row.createdAt,
             ))
         .toList();

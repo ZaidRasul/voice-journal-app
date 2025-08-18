@@ -29,6 +29,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _saveManually() async {
+    final String text = _controller.text.trim();
+    if (text.isEmpty) return;
+    final String journal = _detectJournal(text);
+    await DbService.instance.addEntry(journalName: journal, text: text);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Entry saved')));
+  }
+
   String _detectJournal(String text) {
     final String lower = text.toLowerCase();
     if (lower.contains('weight')) return 'weight';
@@ -61,10 +70,26 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: _busy ? null : _recordAndSave,
-              icon: _busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.mic),
-              label: const Text('Record & Save'),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _busy ? null : _recordAndSave,
+                    icon: _busy
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.mic),
+                    label: const Text('Record & Save'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _controller.text.trim().isEmpty ? null : _saveManually,
+                    icon: const Icon(Icons.save_outlined),
+                    label: const Text('Save'),
+                  ),
+                ),
+              ],
             )
           ],
         ),
