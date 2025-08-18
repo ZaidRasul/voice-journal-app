@@ -1,0 +1,19 @@
+{
+  "name": "voice_journal_rn",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "android": "react-native run-android",
+    "ios": "react-native run-ios"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+    "react-native": "0.72.0",
+    "react-native-fs": "^2.20.0",
+    "vosk-react-native": "0.5.0"
+  },
+  "devDependencies": {
+    "@babel/core": "7.22.9"
+  }
+}
