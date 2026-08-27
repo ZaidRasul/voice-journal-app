@@ -139,7 +139,6 @@ class MainActivity : Activity() {
 
     private fun configureSystemBars() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
             root.setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars())
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
@@ -1024,7 +1023,7 @@ class MainActivity : Activity() {
     ): GradientDrawable = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         setColor(fillColor)
-        cornerRadius = cornerRadius.toFloat()
+        this.cornerRadius = cornerRadius.toFloat()
         if (strokeColor != null) {
             setStroke(dp(1), strokeColor)
         }
