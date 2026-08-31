@@ -9,9 +9,9 @@ import org.junit.Test
 class JournalAnalyticsTest {
     @Test
     fun extractsFirstSignedDecimal() {
-        assertEquals(-2.75, JournalAnalytics.extractFirstNumber("down -2.75 kg, then 1 kg"))
-        assertEquals(0.5, JournalAnalytics.extractFirstNumber("up +.5 kg"))
-        assertEquals(72.0, JournalAnalytics.extractFirstNumber("weight: 72 kg"))
+        assertEquals(-2.75, requireNotNull(JournalAnalytics.extractFirstNumber("down -2.75 kg, then 1 kg")), 0.0)
+        assertEquals(0.5, requireNotNull(JournalAnalytics.extractFirstNumber("up +.5 kg")), 0.0)
+        assertEquals(72.0, requireNotNull(JournalAnalytics.extractFirstNumber("weight: 72 kg")), 0.0)
     }
 
     @Test

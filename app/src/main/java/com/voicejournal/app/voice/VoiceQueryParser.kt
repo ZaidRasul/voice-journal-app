@@ -46,7 +46,7 @@ object VoiceQueryParser {
     ): VoiceQuery? {
         showEntriesFormat.matchEntire(text)?.let { match ->
             val journalName = cleanJournalName(match.groupValues[1])
-            return journalName.takeIf(String::isNotBlank)?.let(VoiceQuery::ShowEntries)
+            return journalName.takeIf(String::isNotBlank)?.let { VoiceQuery.ShowEntries(it) }
         }
 
         val trendMatch = changedFormat.matchEntire(text) ?: trendFormat.matchEntire(text)
@@ -78,6 +78,7 @@ object VoiceQueryParser {
 
         name = name.replace(Regex("""^(?:the\s+)?journal\s+""", RegexOption.IGNORE_CASE), "")
         name = name.replace(Regex("""\s+journal$""", RegexOption.IGNORE_CASE), "")
+        if (name.equals("journal", ignoreCase = true)) return ""
 
         return name
             .trim()

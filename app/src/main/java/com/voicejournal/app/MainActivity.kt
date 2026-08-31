@@ -281,27 +281,48 @@ class MainActivity : Activity() {
     private fun refreshNoteList() {
         val container = noteList ?: return
         container.removeAllViews()
-        val notes = noteStore.listNotes()
+        val query = journalSearchInput?.text?.toString()?.trim().orEmpty()
+        val notes = if (query.isBlank()) {
+            noteStore.listNotes()
+        } else {
+            val matchingIds = noteStore.search(query).mapTo(mutableSetOf()) { it.journalId }
+            noteStore.listNotes().filter { it.id in matchingIds }
+        }
         if (notes.isEmpty()) {
             val empty = verticalLayout().apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(dp(24), dp(32), dp(24), dp(32))
                 background = roundedBackground(surface, line, dp(18))
             }
-            empty.addChild(label("No notes yet", 20f, ink, Typeface.BOLD))
             empty.addChild(
-                label("Create one for ideas, groceries, plans, or anything else.", 14f, muted),
+                label(
+                    if (query.isBlank()) "No journals yet" else "No matching entries",
+                    20f,
+                    ink,
+                    Typeface.BOLD
+                )
+            )
+            empty.addChild(
+                label(
+                    if (query.isBlank()) {
+                        "Create one for ideas, weight, plans, or anything else."
+                    } else {
+                        "Try a journal name or words from an entry."
+                    },
+                    14f,
+                    muted
+                ),
                 top = dp(8)
             )
             container.addChild(empty)
         } else {
             notes.forEach { note ->
-                container.addChild(noteCard(note), bottom = dp(10))
+                container.addChild(noteCard(note, query), bottom = dp(10))
             }
         }
     }
 
-    private fun noteCard(note: JournalNote): View {
+    private fun noteCard(note: JournalNote, query: String): View {
         val card = verticalLayout().apply {
             setPadding(dp(16), dp(14), dp(12), dp(14))
             background = roundedBackground(surface, line, dp(18))
@@ -320,11 +341,20 @@ class MainActivity : Activity() {
             weight = 1f
         )
         top.addChild(
-            roundedButton("Delete", Color.TRANSPARENT, danger) { confirmDeleteFromList(note) },
+            roundedButton("Trend", accentSoft, accent) {
+                val freshJournal = noteStore.findById(note.id) ?: note
+                showAnalyticsScreen(freshJournal)
+            },
             left = dp(8)
         )
+        if (!note.title.equals(NoteStore.DEFAULT_JOURNAL_TITLE, ignoreCase = true)) {
+            top.addChild(
+                roundedButton("Delete", Color.TRANSPARENT, danger) { confirmDeleteFromList(note) },
+                left = dp(4)
+            )
+        }
         card.addChild(top)
-        card.addChild(label(note.preview(), 14f, muted), top = dp(8))
+        card.addChild(label(previewForSearch(note, query), 14f, muted), top = dp(8))
         card.addChild(
             label("Updated " + formatUpdatedAt(note.updatedAt), 12f, muted),
             top = dp(10)
@@ -334,8 +364,8 @@ class MainActivity : Activity() {
 
     private fun confirmDeleteFromList(note: JournalNote) {
         AlertDialog.Builder(this)
-            .setTitle("Delete note?")
-            .setMessage("“" + note.title + "” will be removed from this phone.")
+            .setTitle("Delete journal?")
+            .setMessage("“" + note.title + "” and all its entries will be removed from this phone.")
             .setNegativeButton("Keep", null)
             .setPositiveButton("Delete") { _, _ ->
                 noteStore.delete(note.id)
@@ -347,8 +377,12 @@ class MainActivity : Activity() {
 
     private fun showEditorScreen(note: JournalNote) {
         stopVoiceInput()
+        cancelPendingAutosave()
         screen = Screen.EDITOR
         activeDraft = note
+        activeAnalyticsJournalId = null
+        draftDirty = false
+        journalSearchInput = null
         root.removeAllViews()
 
         val content = verticalLayout().apply {
@@ -362,18 +396,20 @@ class MainActivity : Activity() {
             height = dp(44)
         )
         header.addChild(
-            label(if (note.id == 0L) "New note" else "Edit note", 20f, ink, Typeface.BOLD),
+            label(if (note.id == 0L) "New journal" else "Edit journal", 20f, ink, Typeface.BOLD),
             width = 0,
             weight = 1f,
             left = dp(12)
         )
         header.addChild(
-            roundedButton("Save", accent, Color.WHITE) { saveCurrentNote(showConfirmation = true) }
+            roundedButton("Save", accent, Color.WHITE) {
+                saveCurrentNote(showConfirmation = true, force = true)
+            }
         )
         content.addChild(header)
 
         titleInput = EditText(this).apply {
-            hint = "Give this note a title"
+            hint = "Give this journal a name"
             setText(note.title)
             setTextColor(ink)
             setHintTextColor(muted)
@@ -389,7 +425,7 @@ class MainActivity : Activity() {
         }
         content.addChild(titleInput!!)
 
-        voiceStatus = label("Tap Speak to this note to dictate directly into it.", 13f, accent).also {
+        voiceStatus = label("Tap Speak to this journal to add a timestamped entry.", 13f, accent).also {
             it.setPadding(dp(12), dp(9), dp(12), dp(9))
             it.background = roundedBackground(accentSoft, cornerRadius = dp(12))
         }
@@ -451,7 +487,7 @@ class MainActivity : Activity() {
 
         val actions = horizontalLayout(Gravity.CENTER_VERTICAL)
         actions.addChild(
-            roundedButton("🎙  Speak to this note", accent, Color.WHITE) {
+            roundedButton("🎙  Speak to this journal", accent, Color.WHITE) {
                 beginVoice(VoiceTarget.ACTIVE_NOTE)
             },
             width = 0,
@@ -519,6 +555,10 @@ class MainActivity : Activity() {
             height = dp(36)
         )
         card.addChild(toolbar)
+        card.addChild(
+            label("Entry " + formatEntryTimestamp(block.createdAt), 11f, muted),
+            top = dp(2)
+        )
 
         val body = horizontalLayout(Gravity.TOP)
         if (block.type == BlockType.CHECKBOX) {
