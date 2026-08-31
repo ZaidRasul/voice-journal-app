@@ -8,6 +8,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import java.text.DateFormat
@@ -87,6 +88,7 @@ class TrendLineChartView @JvmOverloads constructor(
         textAlign = Paint.Align.CENTER
         textSize = sp(12f)
     }
+    private val plotBounds = RectF()
 
     private var chartPoints: List<TimeSeriesPoint> = emptyList()
     private var chartTitle: String = DEFAULT_TITLE
@@ -173,12 +175,14 @@ class TrendLineChartView @JvmOverloads constructor(
             labelPaint.measureText(formatValue(axisMaximum - (axisMaximum - axisMinimum) * fraction))
         }
         val xLabelHeight = -labelPaint.fontMetrics.top + labelPaint.fontMetrics.bottom
-        val plot = RectF(
-            contentLeft + largestLabelWidth + dp(10f),
-            titleBaseline + dp(14f),
-            contentRight,
-            contentBottom - xLabelHeight - dp(8f)
-        )
+        val plot = plotBounds.apply {
+            set(
+                contentLeft + largestLabelWidth + dp(10f),
+                titleBaseline + dp(14f),
+                contentRight,
+                contentBottom - xLabelHeight - dp(8f)
+            )
+        }
 
         if (plot.width() < dp(48f) || plot.height() < dp(48f)) return
 
@@ -363,7 +367,11 @@ class TrendLineChartView @JvmOverloads constructor(
 
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
 
-    private fun sp(value: Float): Float = value * resources.displayMetrics.scaledDensity
+    private fun sp(value: Float): Float = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_SP,
+        value,
+        resources.displayMetrics
+    )
 
     private companion object {
         const val DEFAULT_TITLE = "Trend"

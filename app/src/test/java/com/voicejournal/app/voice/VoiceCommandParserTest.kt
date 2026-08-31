@@ -17,13 +17,21 @@ class VoiceCommandParserTest {
     }
 
     @Test
-    fun naturalCommandCreatesNumberedBlock() {
+    fun naturalCommandCreatesPlainTextBlockWithoutTypePrefix() {
         val command = VoiceCommandParser.parse("put 72 kilograms in Weight log")
 
         assertNotNull(command)
         assertEquals("Weight log", command?.noteTitle)
         assertEquals(BlockType.TEXT, command?.block?.type)
         assertEquals("72 kilograms", command?.block?.text)
+    }
+
+    @Test
+    fun untargetedContentCanCreateTypedDefaultJournalEntry() {
+        val block = VoiceCommandParser.parseEntry("numbered 72 kilograms")
+
+        assertEquals(BlockType.NUMBERED, block.type)
+        assertEquals("72 kilograms", block.text)
     }
 
     @Test

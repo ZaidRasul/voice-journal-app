@@ -151,15 +151,16 @@ class VoiceInputController(
         }
 
         val message = errorMessage(error)
-        val mayRestart = mode == VoiceSessionMode.RANT &&
+        val shouldRestart = mode == VoiceSessionMode.RANT &&
             (error == SpeechRecognizer.ERROR_NO_MATCH ||
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) &&
-            restartAttempts < MAX_RESTART_ATTEMPTS
+                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
 
-        if (mayRestart) {
+        if (shouldRestart) {
             restartAttempts += 1
             onStatus("No words heard. Listening again…")
-            scheduleRestart(RESTART_DELAY_MS)
+            scheduleRestart(
+                (RESTART_DELAY_MS * restartAttempts).coerceAtMost(MAX_RESTART_DELAY_MS)
+            )
         } else {
             finishWithError(message)
         }
@@ -218,13 +219,9 @@ class VoiceInputController(
     }
 
     private fun finishWithError(message: String) {
-        val runningMode = mode
         mode = null
         releaseRecognizer()
         onFailure(message)
-        if (runningMode != null) {
-            onStatus("Voice input stopped")
-        }
     }
 
     private fun releaseRecognizer() {
@@ -260,6 +257,6 @@ class VoiceInputController(
 
     private companion object {
         const val RESTART_DELAY_MS = 450L
-        const val MAX_RESTART_ATTEMPTS = 3
+        const val MAX_RESTART_DELAY_MS = 3_000L
     }
 }

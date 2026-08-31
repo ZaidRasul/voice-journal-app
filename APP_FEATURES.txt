@@ -3,29 +3,40 @@ VOICE JOURNAL — FEATURE GUIDE
 
 Purpose
 -------
-Voice Journal is a lightweight, native Android note-taking app. It keeps notes
+Voice Journal is a lightweight, native Android journaling app. It keeps journals
 on the phone in a small SQLite database and uses the Android device's installed
 speech recognizer instead of bundling a large speech model.
 
 What users can do
 -----------------
-1. Create a note from the Notes screen.
-2. Rename, edit, save, reopen, and delete notes at any time.
-3. Mix several block types in the same note:
+1. Create named journals from the Journals screen. Untargeted voice entries go
+   to an always-available “Default Journal”.
+2. Rename, edit, save, reopen, and delete journals at any time.
+3. Mix several entry types in the same journal:
    - Plain text
    - Bulleted list items
    - Numbered list items
    - Checkboxes / checklist items
-4. Give each block a text style:
+4. Give each entry a text style:
    - Body
    - Heading
    - Subheading
    - Quote
-5. Reorder or remove individual blocks while editing.
-6. Tap “Speak to this note” to dictate text into the note currently open.
-7. Tap “Voice command” on the Notes screen to route speech to a named note.
+5. Reorder or remove individual entries while editing.
+6. Tap “Speak to this journal” to dictate into the journal currently open.
+7. Tap “Voice command” on the Journals screen to route speech to a named journal.
 8. Use Rant mode for a live, continuously appended transcript. Rant mode never
-   interprets speech as a command. Its text can be saved as a normal note.
+   interprets speech as a command. Its text can be saved as a normal journal.
+9. Search journal names and entry text from the Journals screen.
+10. Every journal entry carries its own creation date and time.
+11. Ask to retrieve a journal or analyze its numeric entries:
+
+  show me all entries from weight journal
+  how has my weight changed over the last month?
+
+12. Open Trend on any journal to see numeric measurements, change, minimum,
+    maximum, and a time-series graph. The first number in each entry is treated
+    as that entry's measurement.
 
 Voice-command examples
 ----------------------
@@ -38,15 +49,15 @@ The clearest global command format is:
 
 The words “checkbox”, “bullet”, “numbered”, and “text” at the start of the
 content choose a block type. Content without one of those words becomes a plain
-text block. If a named note does not exist, Voice Journal creates it, then adds
+text entry. If a named journal does not exist, Voice Journal creates it, then adds
 the dictated block.
 
 Daily and weekly list ideas
 ---------------------------
-• A “Daily weight” note can contain dated numbered entries.
-• A “Groceries” note can contain checkbox items and ordinary reminders.
-• A “Weekly plan” note can mix a heading, bullet items, numbered steps, and
-  checkboxes in a single note.
+• A “Daily weight” journal can contain automatically dated numbered entries.
+• A “Groceries” journal can contain checkbox items and ordinary reminders.
+• A “Weekly plan” journal can mix a heading, bullet items, numbered steps, and
+  checkboxes.
 
 Privacy and voice behavior
 --------------------------
@@ -58,8 +69,8 @@ taps a voice control. Rant mode stops when the app leaves the foreground.
 
 Storage and size
 ----------------
-The baseline intentionally has no Flutter runtime, cloud SDK, ads, analytics,
-or bundled Vosk/Whisper model. Notes are stored in the app's private SQLite
+The baseline intentionally has no Flutter runtime, cloud SDK, ads, usage tracking,
+or bundled Vosk/Whisper model. Journals are stored in the app's private SQLite
 database and are eligible for the user's normal Android backup settings.
 
 Technical baseline

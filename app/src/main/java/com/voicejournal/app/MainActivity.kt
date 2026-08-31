@@ -1,6 +1,7 @@
 package com.voicejournal.app
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
@@ -177,7 +178,8 @@ class MainActivity : Activity() {
         }
     }
 
-    @Suppress("DEPRECATION")
+    @SuppressLint("GestureBackNavigation")
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
         if (screen == Screen.NOTES) {
             super.onBackPressed()
@@ -237,7 +239,7 @@ class MainActivity : Activity() {
             label("Voice Journal", 28f, ink, Typeface.BOLD)
         )
         heading.addChild(
-            label("Notes that stay simple, even when your thoughts are not.", 14f, muted),
+            label("Journals that stay simple, even when your thoughts are not.", 14f, muted),
             top = dp(2)
         )
         header.addChild(heading, width = 0, weight = 1f)
@@ -1077,7 +1079,7 @@ class MainActivity : Activity() {
         )
         content.addChild(controls, top = dp(8))
         content.addChild(
-            roundedButton("Save transcript as note", surface, accent) { saveRantAsNote() },
+            roundedButton("Save transcript as journal", surface, accent) { saveRantAsNote() },
             top = dp(8)
         )
 
@@ -1094,7 +1096,7 @@ class MainActivity : Activity() {
     private fun renderRantTranscript() {
         val view = rantTranscriptView ?: return
         if (rantTranscript.isBlank()) {
-            view.text = "Your spoken thoughts will appear here."
+            view.text = getString(R.string.rant_empty_transcript)
             view.setTextColor(muted)
             view.setTypeface(Typeface.DEFAULT, Typeface.ITALIC)
         } else {
@@ -1111,7 +1113,7 @@ class MainActivity : Activity() {
         }
         AlertDialog.Builder(this)
             .setTitle("Clear rant transcript?")
-            .setMessage("This clears the unsaved rant text. Saved notes stay untouched.")
+            .setMessage("This clears the unsaved rant text. Saved journals stay untouched.")
             .setNegativeButton("Keep", null)
             .setPositiveButton("Clear") { _, _ ->
                 rantTranscript = ""
@@ -1139,7 +1141,7 @@ class MainActivity : Activity() {
             blocks = mutableListOf(NoteBlock(type = BlockType.TEXT, text = rantTranscript))
         )
         noteStore.save(note)
-        toast("Transcript saved as a note")
+        toast("Transcript saved as a journal")
     }
 
     private fun beginVoice(target: VoiceTarget) {
