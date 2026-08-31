@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -12,6 +13,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.net.Uri
+import android.provider.Settings
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -155,6 +158,7 @@ class MainActivity : Activity() {
             startVoice(requestedTarget)
         } else {
             showVoiceFailure("Microphone permission was not granted.")
+            showMicrophoneSettingsDialog()
         }
     }
 
@@ -244,7 +248,7 @@ class MainActivity : Activity() {
         )
         header.addChild(heading, width = 0, weight = 1f)
         header.addChild(
-            roundedButton("Rant", accentSoft, accent) { showRantScreen() },
+            roundedButton("🎙  Rant", accentSoft, accent) { showRantScreen(autoStart = true) },
             left = dp(8)
         )
         content.addChild(header)
@@ -259,6 +263,7 @@ class MainActivity : Activity() {
         )
 
         voiceStatus = label("Ready for a voice command.", 13f, accent).also {
+            it.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             it.setPadding(dp(12), dp(10), dp(12), dp(10))
             it.background = roundedBackground(accentSoft, cornerRadius = dp(12))
         }
@@ -298,32 +303,27 @@ class MainActivity : Activity() {
         listHeader.addChild(label("Newest first", 12f, muted))
         content.addChild(listHeader, top = dp(20), bottom = dp(8))
 
-        val scrollView = ScrollView(this).apply {
-            isFillViewport = true
-            clipToPadding = false
-        }
         noteList = verticalLayout()
-        scrollView.addView(
-            noteList,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-        content.addChild(
-            scrollView,
-            width = ViewGroup.LayoutParams.MATCH_PARENT,
-            height = 0,
-            weight = 1f
-        )
+        content.addChild(noteList!!)
 
         content.addChild(
             roundedButton("+  New journal", accent, Color.WHITE) { showEditorScreen(newNote()) },
             top = dp(14)
         )
 
+        val pageScroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            addView(
+                content,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
         root.addView(
-            content,
+            pageScroll,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -495,6 +495,7 @@ class MainActivity : Activity() {
         content.addChild(titleInput!!)
 
         voiceStatus = label("Tap Speak to this journal to add a timestamped entry.", 13f, accent).also {
+            it.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             it.setPadding(dp(12), dp(9), dp(12), dp(9))
             it.background = roundedBackground(accentSoft, cornerRadius = dp(12))
         }
@@ -985,7 +986,7 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun showRantScreen() {
+    private fun showRantScreen(autoStart: Boolean = false) {
         stopVoiceInput()
         saveCurrentNote(showConfirmation = false)
         cancelPendingAutosave()
@@ -1028,7 +1029,12 @@ class MainActivity : Activity() {
             top = dp(12)
         )
 
-        voiceStatus = label("Tap Start rant when you are ready.", 13f, accent).also {
+        voiceStatus = label(
+            if (autoStart) "Preparing the microphone…" else "Tap Start rant when you are ready.",
+            13f,
+            accent
+        ).also {
+            it.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             it.setPadding(dp(12), dp(9), dp(12), dp(9))
             it.background = roundedBackground(accentSoft, cornerRadius = dp(12))
         }
@@ -1039,29 +1045,6 @@ class MainActivity : Activity() {
             it.setPadding(dp(8), dp(6), dp(8), dp(6))
         }
         content.addChild(voicePartial!!)
-
-        rantScrollView = ScrollView(this).apply {
-            isFillViewport = true
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        rantTranscriptView = label("", 17f, ink).apply {
-            setTextIsSelectable(true)
-            setPadding(dp(16), dp(18), dp(16), dp(18))
-            background = roundedBackground(surface, line, dp(18))
-        }
-        rantScrollView?.addView(
-            rantTranscriptView,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        )
-        content.addChild(
-            rantScrollView!!,
-            width = ViewGroup.LayoutParams.MATCH_PARENT,
-            height = 0,
-            weight = 1f
-        )
 
         val controls = horizontalLayout(Gravity.CENTER_VERTICAL)
         controls.addChild(
@@ -1083,6 +1066,31 @@ class MainActivity : Activity() {
             top = dp(8)
         )
 
+        rantTranscriptView = label("", 17f, ink).apply {
+            setTextIsSelectable(true)
+            minHeight = dp(140)
+            gravity = Gravity.TOP
+            setPadding(dp(16), dp(18), dp(16), dp(18))
+            background = roundedBackground(surface, line, dp(18))
+        }
+        rantScrollView = ScrollView(this).apply {
+            isFillViewport = true
+            setPadding(0, dp(8), 0, dp(8))
+            addView(
+                rantTranscriptView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        content.addChild(
+            rantScrollView!!,
+            width = ViewGroup.LayoutParams.MATCH_PARENT,
+            height = 0,
+            weight = 1f,
+            top = dp(8)
+        )
         root.addView(
             content,
             FrameLayout.LayoutParams(
@@ -1091,6 +1099,9 @@ class MainActivity : Activity() {
             )
         )
         renderRantTranscript()
+        if (autoStart) {
+            root.post { beginVoice(VoiceTarget.RANT) }
+        }
     }
 
     private fun renderRantTranscript() {
@@ -1128,7 +1139,7 @@ class MainActivity : Activity() {
 
     private fun saveRantAsNote() {
         if (rantTranscript.isBlank()) {
-            toast("Start rant mode and speak first.")
+            toast("No transcript yet. Tap Start rant, allow microphone access, and speak.")
             return
         }
         val title = "Rant " + DateFormat.getDateTimeInstance(
@@ -1149,10 +1160,48 @@ class MainActivity : Activity() {
             PackageManager.PERMISSION_GRANTED
         ) {
             pendingVoiceTarget = target
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            if (shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+                AlertDialog.Builder(this)
+                    .setTitle("Microphone permission needed")
+                    .setMessage(
+                        "Voice Journal needs microphone access only while you are actively dictating. " +
+                            "It saves the recognized text, not raw audio."
+                    )
+                    .setNegativeButton("Not now") { _, _ ->
+                        pendingVoiceTarget = null
+                        showVoiceStatus("Microphone permission is required to transcribe speech.")
+                    }
+                    .setPositiveButton("Continue") { _, _ -> requestMicrophonePermission() }
+                    .show()
+            } else {
+                requestMicrophonePermission()
+            }
             return
         }
         startVoice(target)
+    }
+
+    private fun requestMicrophonePermission() {
+        showVoiceStatus("Waiting for microphone permission…")
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+    }
+
+    private fun showMicrophoneSettingsDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Enable microphone access")
+            .setMessage(
+                "If Android no longer shows the permission prompt, enable Microphone under this app's permissions."
+            )
+            .setNegativeButton("Not now", null)
+            .setPositiveButton("Open settings") { _, _ ->
+                startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+            .show()
     }
 
     private fun startVoice(target: VoiceTarget) {
@@ -1399,7 +1448,11 @@ class MainActivity : Activity() {
 
     private fun LinearLayout.addChild(
         view: View,
-        width: Int = ViewGroup.LayoutParams.MATCH_PARENT,
+        width: Int = if (orientation == LinearLayout.HORIZONTAL) {
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        } else {
+            ViewGroup.LayoutParams.MATCH_PARENT
+        },
         height: Int = ViewGroup.LayoutParams.WRAP_CONTENT,
         weight: Float = 0f,
         left: Int = 0,

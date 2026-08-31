@@ -34,6 +34,8 @@ class VoiceInputController(
     private var mode: VoiceSessionMode? = null
     private var segmentFinalized = false
     private var restartAttempts = 0
+    private var usingOnDeviceRecognizer = false
+    private var standardFallbackAttempted = false
 
     val isRunning: Boolean
         get() = mode != null
@@ -74,16 +76,10 @@ class VoiceInputController(
             return
         }
 
-        val created = runCatching {
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-            ) {
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            } else {
-                SpeechRecognizer.createSpeechRecognizer(context)
-            }
-        }.getOrElse {
+        standardFallbackAttempted = false
+        val prefersOnDevice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        val created = createRecognizer(prefersOnDevice) ?: run {
             onFailure("The phone could not start speech recognition.")
             return
         }
@@ -125,7 +121,6 @@ class VoiceInputController(
             )
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
 
@@ -151,6 +146,27 @@ class VoiceInputController(
         }
 
         val message = errorMessage(error)
+        val languageModelUnavailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)
+        val canUseStandardFallback = usingOnDeviceRecognizer &&
+            !standardFallbackAttempted &&
+            languageModelUnavailable
+        if (canUseStandardFallback) {
+            standardFallbackAttempted = true
+            releaseRecognizer()
+            val fallback = createRecognizer(preferOnDevice = false)
+            if (fallback == null) {
+                finishWithError(message)
+                return
+            }
+            recognizer = fallback
+            recognizer?.setRecognitionListener(this)
+            onStatus("Using the phone's speech service…")
+            handler.post(::startNextSegment)
+            return
+        }
+
         val shouldRestart = mode == VoiceSessionMode.RANT &&
             (error == SpeechRecognizer.ERROR_NO_MATCH ||
                 error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
@@ -227,6 +243,21 @@ class VoiceInputController(
     private fun releaseRecognizer() {
         recognizer?.destroy()
         recognizer = null
+    }
+
+    private fun createRecognizer(preferOnDevice: Boolean): SpeechRecognizer? {
+        if (preferOnDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching {
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            }.getOrNull()?.let { created ->
+                usingOnDeviceRecognizer = true
+                return created
+            }
+            standardFallbackAttempted = true
+        }
+
+        usingOnDeviceRecognizer = false
+        return runCatching { SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
     }
 
     private fun errorMessage(error: Int): String = when (error) {
