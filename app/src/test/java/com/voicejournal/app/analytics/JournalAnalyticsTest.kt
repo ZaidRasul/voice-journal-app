@@ -3,7 +3,6 @@ package com.voicejournal.app.analytics
 import com.voicejournal.app.data.NoteBlock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JournalAnalyticsTest {
@@ -12,6 +11,8 @@ class JournalAnalyticsTest {
         assertEquals(-2.75, requireNotNull(JournalAnalytics.extractFirstNumber("down -2.75 kg, then 1 kg")), 0.0)
         assertEquals(0.5, requireNotNull(JournalAnalytics.extractFirstNumber("up +.5 kg")), 0.0)
         assertEquals(72.0, requireNotNull(JournalAnalytics.extractFirstNumber("weight: 72 kg")), 0.0)
+        assertEquals(-72.5, requireNotNull(JournalAnalytics.extractFirstNumber("weight -72.5kg")), 0.0)
+        assertEquals(1234.5, requireNotNull(JournalAnalytics.extractFirstNumber("distance 1,234.5m")), 0.0)
     }
 
     @Test
@@ -95,6 +96,5 @@ class JournalAnalyticsTest {
 
         assertEquals("70 kg", summary.points.single().sourceText)
         assertEquals(70.0, summary.points.single().value, 0.0)
-        assertTrue(summary.points !== listOf(block))
     }
 }

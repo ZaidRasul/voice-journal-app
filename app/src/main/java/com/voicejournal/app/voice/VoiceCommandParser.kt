@@ -52,6 +52,9 @@ object VoiceCommandParser {
         }
     }
 
+    /** Converts untargeted speech into a typed entry for the default journal. */
+    fun parseEntry(spoken: String): NoteBlock = spoken.toBlock()
+
     private fun String.cleanTitle(): String =
         trim()
             .trimEnd('.', ',', '!', '?')

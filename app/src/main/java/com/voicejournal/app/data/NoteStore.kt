@@ -86,7 +86,7 @@ class NoteStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nul
         JournalSearch.filter(listNotes(), query)
 
     fun save(note: JournalNote) {
-        note.title = note.title.trim().ifBlank { "Untitled note" }
+        note.title = note.title.trim().ifBlank { "Untitled Journal" }
         if (note.blocks.isEmpty()) {
             note.blocks += NoteBlock()
         }

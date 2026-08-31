@@ -19,7 +19,9 @@ data class AnalyticsSummary(
 
 /** Extracts numeric journal observations and summarizes them chronologically. */
 object JournalAnalytics {
-    private val signedDecimal = Regex("""(?<![\w.])[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?![\w.])""")
+    private val signedDecimal = Regex(
+        """(?<![\w.,])[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?![.,]\d)"""
+    )
 
     fun analyze(
         blocks: List<NoteBlock>,
@@ -57,6 +59,7 @@ object JournalAnalytics {
     fun extractFirstNumber(text: String): Double? = signedDecimal
         .find(text)
         ?.value
+        ?.replace(",", "")
         ?.toDoubleOrNull()
         ?.takeIf(Double::isFinite)
 }

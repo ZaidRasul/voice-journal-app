@@ -19,6 +19,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.window.OnBackInvokedDispatcher
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -29,15 +30,21 @@ import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.voicejournal.app.analytics.JournalAnalytics
 import com.voicejournal.app.data.BlockStyle
 import com.voicejournal.app.data.BlockType
 import com.voicejournal.app.data.JournalNote
 import com.voicejournal.app.data.NoteBlock
 import com.voicejournal.app.data.NoteStore
 import com.voicejournal.app.data.preview
+import com.voicejournal.app.ui.TimeSeriesPoint
+import com.voicejournal.app.ui.TrendLineChartView
 import com.voicejournal.app.voice.VoiceCommandParser
 import com.voicejournal.app.voice.VoiceInputController
+import com.voicejournal.app.voice.VoiceQuery
+import com.voicejournal.app.voice.VoiceQueryParser
 import java.text.DateFormat
+import java.text.NumberFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -160,12 +167,57 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun configureBackNavigation() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT
+            ) {
+                if (screen == Screen.NOTES) finish() else navigateBack()
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (screen == Screen.NOTES) {
+            super.onBackPressed()
+        } else {
+            navigateBack()
+        }
+    }
+
+    private fun restoreScreen(savedInstanceState: Bundle?) {
+        val restoredScreen = savedInstanceState
+            ?.getString(STATE_SCREEN)
+            ?.let { savedName -> Screen.entries.firstOrNull { it.name == savedName } }
+            ?: Screen.NOTES
+        val journalId = savedInstanceState?.getLong(STATE_ACTIVE_JOURNAL_ID) ?: 0L
+        when (restoredScreen) {
+            Screen.EDITOR -> {
+                val journal = journalId.takeIf { it != 0L }?.let(noteStore::findById) ?: newNote()
+                showEditorScreen(journal)
+            }
+
+            Screen.RANT -> showRantScreen()
+            Screen.ANALYTICS -> {
+                val journal = journalId.takeIf { it != 0L }?.let(noteStore::findById)
+                if (journal == null) showNotesScreen(stopVoice = false) else showAnalyticsScreen(journal)
+            }
+
+            Screen.NOTES -> showNotesScreen(
+                stopVoice = false,
+                initialQuery = savedInstanceState?.getString(STATE_SEARCH_QUERY).orEmpty()
+            )
+        }
+    }
+
     private fun showNotesScreen(stopVoice: Boolean = true, initialQuery: String = "") {
         if (stopVoice) {
             stopVoiceInput()
         }
         saveCurrentNote(showConfirmation = false)
         cancelPendingAutosave()
+        noteStore.ensureDefaultJournal()
         activeDraft = null
         activeAnalyticsJournalId = null
         draftDirty = false
@@ -285,7 +337,7 @@ class MainActivity : Activity() {
         val notes = if (query.isBlank()) {
             noteStore.listNotes()
         } else {
-            val matchingIds = noteStore.search(query).mapTo(mutableSetOf()) { it.journalId }
+            val matchingIds = noteStore.search(query).mapTo(mutableSetOf()) { it.journal.id }
             noteStore.listNotes().filter { it.id in matchingIds }
         }
         if (notes.isEmpty()) {
@@ -362,6 +414,21 @@ class MainActivity : Activity() {
         return card
     }
 
+    private fun previewForSearch(note: JournalNote, query: String): String {
+        if (query.isBlank() || note.title.contains(query, ignoreCase = true)) {
+            return note.preview()
+        }
+        return note.blocks
+            .asSequence()
+            .filter { it.text.contains(query, ignoreCase = true) }
+            .take(2)
+            .joinToString("  ") { block ->
+                formatEntryTimestamp(block.createdAt) + " · " + block.text.trim()
+            }
+            .take(220)
+            .ifBlank { note.preview() }
+    }
+
     private fun confirmDeleteFromList(note: JournalNote) {
         AlertDialog.Builder(this)
             .setTitle("Delete journal?")
@@ -370,7 +437,7 @@ class MainActivity : Activity() {
             .setPositiveButton("Delete") { _, _ ->
                 noteStore.delete(note.id)
                 refreshNoteList()
-                toast("Note deleted")
+                toast("Journal deleted")
             }
             .show()
     }
@@ -493,10 +560,12 @@ class MainActivity : Activity() {
             width = 0,
             weight = 1f
         )
-        actions.addChild(
-            roundedButton("Delete", Color.TRANSPARENT, danger) { confirmDeleteCurrentNote() },
-            left = dp(8)
-        )
+        if (!note.title.equals(NoteStore.DEFAULT_JOURNAL_TITLE, ignoreCase = true)) {
+            actions.addChild(
+                roundedButton("Delete", Color.TRANSPARENT, danger) { confirmDeleteCurrentNote() },
+                left = dp(8)
+            )
+        }
         content.addChild(actions, top = dp(10))
 
         root.addView(
@@ -713,48 +782,218 @@ class MainActivity : Activity() {
     private fun findBlock(blockId: String): NoteBlock? =
         activeDraft?.blocks?.firstOrNull { it.id == blockId }
 
-    private fun saveCurrentNote(showConfirmation: Boolean) {
+    private fun saveCurrentNote(showConfirmation: Boolean, force: Boolean = false) {
         val draft = activeDraft ?: return
+        if (!force && !draftDirty) {
+            return
+        }
+        cancelPendingAutosave()
         noteStore.save(draft)
         val input = titleInput
         if (input != null && input.text.toString() != draft.title) {
             input.setText(draft.title)
             input.setSelection(draft.title.length)
         }
+        cancelPendingAutosave()
+        draftDirty = false
         if (showConfirmation) {
-            toast("Note saved")
+            toast("Journal saved")
         }
     }
 
     private fun scheduleAutosave() {
+        draftDirty = true
         autosaveTask?.let(autosaveHandler::removeCallbacks)
-        autosaveTask = Runnable { saveCurrentNote(showConfirmation = false) }
+        autosaveTask = Runnable {
+            autosaveTask = null
+            saveCurrentNote(showConfirmation = false)
+        }
         autosaveHandler.postDelayed(autosaveTask!!, AUTOSAVE_DELAY_MS)
+    }
+
+    private fun cancelPendingAutosave() {
+        autosaveTask?.let(autosaveHandler::removeCallbacks)
+        autosaveTask = null
     }
 
     private fun confirmDeleteCurrentNote() {
         val draft = activeDraft ?: return
         if (draft.id == 0L) {
-            navigateBack()
+            cancelPendingAutosave()
+            activeDraft = null
+            draftDirty = false
+            showNotesScreen(stopVoice = false)
             return
         }
         AlertDialog.Builder(this)
-            .setTitle("Delete note?")
-            .setMessage("“" + draft.title + "” will be removed from this phone.")
+            .setTitle("Delete journal?")
+            .setMessage("“" + draft.title + "” and all its entries will be removed from this phone.")
             .setNegativeButton("Keep", null)
             .setPositiveButton("Delete") { _, _ ->
                 noteStore.delete(draft.id)
                 activeDraft = null
+                draftDirty = false
                 showNotesScreen(stopVoice = false)
-                toast("Note deleted")
+                toast("Journal deleted")
             }
             .show()
+    }
+
+    private fun showAnalyticsScreen(
+        journal: JournalNote,
+        since: Long = Long.MIN_VALUE,
+        until: Long = Long.MAX_VALUE,
+        rangeLabel: String = "All timestamped entries"
+    ) {
+        stopVoiceInput()
+        saveCurrentNote(showConfirmation = false)
+        cancelPendingAutosave()
+        activeDraft = null
+        activeAnalyticsJournalId = journal.id
+        draftDirty = false
+        journalSearchInput = null
+        noteList = null
+        blockList = null
+        titleInput = null
+        voiceStatus = null
+        voicePartial = null
+        screen = Screen.ANALYTICS
+        root.removeAllViews()
+
+        val summary = JournalAnalytics.analyze(journal.blocks, since, until)
+        val content = verticalLayout().apply {
+            setPadding(dp(16), dp(14), dp(16), dp(22))
+        }
+        val header = horizontalLayout(Gravity.CENTER_VERTICAL)
+        header.addChild(
+            roundedButton("←", accentSoft, accent) { navigateBack() },
+            width = dp(48),
+            height = dp(44)
+        )
+        header.addChild(
+            label(journal.title + " trend", 22f, ink, Typeface.BOLD),
+            width = 0,
+            weight = 1f,
+            left = dp(12)
+        )
+        content.addChild(header)
+        content.addChild(label(rangeLabel, 13f, muted), top = dp(8))
+
+        val chart = TrendLineChartView(this).apply {
+            setChartTitle(journal.title)
+            setPoints(
+                summary?.points.orEmpty().map { point ->
+                    TimeSeriesPoint(point.timestamp, point.value)
+                }
+            )
+        }
+        content.addChild(
+            chart,
+            height = dp(300),
+            top = dp(14)
+        )
+
+        if (summary == null) {
+            content.addChild(
+                label(
+                    "No numeric entries were found for this period. Add entries such as “72.4 kg” to graph a trend.",
+                    14f,
+                    muted
+                ),
+                top = dp(12)
+            )
+        } else {
+            val direction = when {
+                summary.change > 0.0 -> "+"
+                else -> ""
+            }
+            val metrics = verticalLayout().apply {
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = roundedBackground(surface, line, dp(14))
+            }
+            metrics.addChild(
+                label(
+                    "${summary.points.size} measurements · Change $direction${formatNumber(summary.change)}",
+                    16f,
+                    ink,
+                    Typeface.BOLD
+                )
+            )
+            metrics.addChild(
+                label(
+                    "Start ${formatNumber(summary.startValue)}  ·  Latest ${formatNumber(summary.endValue)}",
+                    14f,
+                    muted
+                ),
+                top = dp(6)
+            )
+            metrics.addChild(
+                label(
+                    "Minimum ${formatNumber(summary.min)}  ·  Maximum ${formatNumber(summary.max)}",
+                    14f,
+                    muted
+                ),
+                top = dp(4)
+            )
+            content.addChild(metrics, top = dp(12))
+
+            content.addChild(label("Measurements", 17f, ink, Typeface.BOLD), top = dp(18))
+            summary.points.asReversed().take(12).forEach { point ->
+                val row = verticalLayout().apply {
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    background = roundedBackground(surface, line, dp(12))
+                }
+                row.addChild(
+                    label(
+                        formatNumber(point.value) + " · " + formatEntryTimestamp(point.timestamp),
+                        14f,
+                        ink,
+                        Typeface.BOLD
+                    )
+                )
+                row.addChild(label(point.sourceText, 13f, muted), top = dp(3))
+                content.addChild(row, top = dp(7))
+            }
+        }
+
+        content.addChild(
+            roundedButton("Edit journal", accent, Color.WHITE) {
+                val freshJournal = noteStore.findById(journal.id) ?: journal
+                showEditorScreen(freshJournal)
+            },
+            top = dp(16)
+        )
+
+        val scrollView = ScrollView(this).apply {
+            isFillViewport = true
+            addView(
+                content,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        root.addView(
+            scrollView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
     }
 
     private fun showRantScreen() {
         stopVoiceInput()
         saveCurrentNote(showConfirmation = false)
+        cancelPendingAutosave()
         activeDraft = null
+        activeAnalyticsJournalId = null
+        draftDirty = false
+        journalSearchInput = null
+        noteList = null
+        blockList = null
+        titleInput = null
         screen = Screen.RANT
         root.removeAllViews()
 
@@ -933,7 +1172,7 @@ class MainActivity : Activity() {
 
     private fun handleFinalVoiceText(transcript: String) {
         when (activeVoiceTarget) {
-            VoiceTarget.HOME_COMMAND -> addVoiceCommandToNote(transcript)
+            VoiceTarget.HOME_COMMAND -> handleHomeVoice(transcript)
             VoiceTarget.ACTIVE_NOTE -> appendToActiveNote(transcript)
             VoiceTarget.RANT -> appendToRant(transcript)
             null -> Unit
@@ -944,17 +1183,56 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun handleHomeVoice(transcript: String) {
+        when (val query = VoiceQueryParser.parse(transcript)) {
+            is VoiceQuery.ShowEntries -> {
+                val journal = findJournalBySpokenName(query.journalName)
+                if (journal == null) {
+                    journalSearchInput?.setText(query.journalName)
+                    showVoiceStatus("No journal named “${query.journalName}” was found.")
+                    toast("Journal not found")
+                } else {
+                    showEditorScreen(journal)
+                    toast("Showing entries from “${journal.title}”")
+                }
+            }
+
+            is VoiceQuery.AnalyzeTrend -> {
+                val journal = findJournalBySpokenName(query.journalName)
+                if (journal == null) {
+                    journalSearchInput?.setText(query.journalName)
+                    showVoiceStatus("No journal named “${query.journalName}” was found.")
+                    toast("Journal not found")
+                } else {
+                    showAnalyticsScreen(
+                        journal = journal,
+                        since = query.range.startInclusiveMillis,
+                        until = query.range.endInclusiveMillis,
+                        rangeLabel = "Last ${VoiceQueryParser.LAST_MONTH_DAYS} days"
+                    )
+                }
+            }
+
+            null -> addVoiceCommandToNote(transcript)
+        }
+    }
+
     private fun addVoiceCommandToNote(transcript: String) {
         val command = VoiceCommandParser.parse(transcript)
         if (command == null) {
-            showVoiceStatus("I heard: “" + transcript + "”")
-            toast("Say “add to Note title: text to add”.")
+            val target = noteStore.ensureDefaultJournal()
+            val entry = VoiceCommandParser.parseEntry(transcript)
+            appendJournalEntry(target, entry)
+            noteStore.save(target)
+            refreshNoteList()
+            showVoiceStatus("Added to “${target.title}”")
+            toast("Voice entry saved")
             return
         }
 
         val existing = noteStore.findMostRecentByTitle(command.noteTitle)
         val target = existing ?: JournalNote(title = command.noteTitle)
-        target.blocks += command.block
+        appendJournalEntry(target, command.block)
         noteStore.save(target)
         refreshNoteList()
         val outcome = if (existing == null) "Created " else "Added to "
@@ -967,20 +1245,28 @@ class MainActivity : Activity() {
         if (draft == null || screen != Screen.EDITOR) {
             return
         }
-        val lastBlock = draft.blocks.lastOrNull()
-        if (
-            lastBlock != null &&
-            lastBlock.type == BlockType.TEXT &&
-            lastBlock.style == BlockStyle.BODY &&
-            lastBlock.text.isNotBlank()
-        ) {
-            lastBlock.text = lastBlock.text.trimEnd() + " " + transcript
-        } else {
-            draft.blocks += NoteBlock(type = BlockType.TEXT, text = transcript)
-        }
+        appendJournalEntry(draft, NoteBlock(type = BlockType.TEXT, text = transcript))
         renderEditorBlocks()
+        draftDirty = true
         saveCurrentNote(showConfirmation = false)
-        showVoiceStatus("Added to this note.")
+        showVoiceStatus("Added a timestamped entry to this journal.")
+    }
+
+    private fun appendJournalEntry(journal: JournalNote, entry: NoteBlock) {
+        if (journal.blocks.size == 1 && journal.blocks[0].text.isBlank()) {
+            journal.blocks[0] = entry
+        } else {
+            journal.blocks += entry
+        }
+    }
+
+    private fun findJournalBySpokenName(name: String): JournalNote? {
+        val normalized = name.trim()
+        noteStore.findMostRecentByTitle(normalized)?.let { return it }
+        noteStore.findMostRecentByTitle("$normalized Journal")?.let { return it }
+        return noteStore.listNotes().firstOrNull { journal ->
+            journal.title.removeSuffix(" Journal").equals(normalized, ignoreCase = true)
+        }
     }
 
     private fun appendToRant(transcript: String) {
@@ -1016,7 +1302,7 @@ class MainActivity : Activity() {
     private fun navigateBack() {
         when (screen) {
             Screen.NOTES -> finish()
-            Screen.EDITOR, Screen.RANT -> showNotesScreen()
+            Screen.EDITOR, Screen.RANT, Screen.ANALYTICS -> showNotesScreen()
         }
     }
 
@@ -1030,6 +1316,19 @@ class MainActivity : Activity() {
             DateFormat.SHORT,
             Locale.getDefault()
         ).format(Date(time))
+
+    private fun formatEntryTimestamp(time: Long): String =
+        DateFormat.getDateTimeInstance(
+            DateFormat.MEDIUM,
+            DateFormat.SHORT,
+            Locale.getDefault()
+        ).format(Date(time))
+
+    private fun formatNumber(value: Double): String = NumberFormat.getNumberInstance().run {
+        maximumFractionDigits = 2
+        minimumFractionDigits = 0
+        format(value)
+    }
 
     private fun verticalLayout(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
@@ -1133,7 +1432,8 @@ class MainActivity : Activity() {
     private enum class Screen {
         NOTES,
         EDITOR,
-        RANT
+        RANT,
+        ANALYTICS
     }
 
     private enum class VoiceTarget {
@@ -1147,5 +1447,8 @@ class MainActivity : Activity() {
         const val AUTOSAVE_DELAY_MS = 650L
         const val PREFERENCES = "voice_journal_preferences"
         const val PREFERENCE_RANT_DRAFT = "rant_draft"
+        const val STATE_SCREEN = "screen"
+        const val STATE_ACTIVE_JOURNAL_ID = "active_journal_id"
+        const val STATE_SEARCH_QUERY = "search_query"
     }
 }

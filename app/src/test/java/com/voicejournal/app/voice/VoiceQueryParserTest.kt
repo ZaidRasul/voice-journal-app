@@ -8,7 +8,7 @@ import org.junit.Test
 class VoiceQueryParserTest {
     @Test
     fun parsesShowEntriesAndRemovesJournalSuffix() {
-        val query = VoiceQueryParser.parse("Show me all entries from weight journal")
+        val query = VoiceQueryParser.parse("Show me all entries from my weight journal")
 
         assertEquals(VoiceQuery.ShowEntries("weight"), query)
     }

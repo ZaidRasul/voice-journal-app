@@ -144,5 +144,5 @@ fun JournalNote.preview(): String {
         }
     }.joinToString("  ")
 
-    return text.take(180).ifBlank { "Empty note" }
+    return text.take(180).ifBlank { "No entries yet" }
 }
