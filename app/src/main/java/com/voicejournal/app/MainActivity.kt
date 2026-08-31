@@ -50,10 +50,13 @@ class MainActivity : Activity() {
 
     private val autosaveHandler = Handler(Looper.getMainLooper())
     private var autosaveTask: Runnable? = null
+    private var draftDirty = false
 
     private var screen = Screen.NOTES
     private var activeDraft: JournalNote? = null
+    private var activeAnalyticsJournalId: Long? = null
     private var noteList: LinearLayout? = null
+    private var journalSearchInput: EditText? = null
     private var blockList: LinearLayout? = null
     private var titleInput: EditText? = null
     private var voiceStatus: TextView? = null
@@ -78,6 +81,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         noteStore = NoteStore(applicationContext)
+        noteStore.ensureDefaultJournal()
         rantTranscript = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
             .getString(PREFERENCE_RANT_DRAFT, "")
             .orEmpty()
@@ -96,7 +100,8 @@ class MainActivity : Activity() {
             onFailure = ::showVoiceFailure
         )
 
-        showNotesScreen(stopVoice = false)
+        configureBackNavigation()
+        restoreScreen(savedInstanceState)
     }
 
     override fun onStop() {
@@ -106,6 +111,14 @@ class MainActivity : Activity() {
         }
         saveCurrentNote(showConfirmation = false)
         super.onStop()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        saveCurrentNote(showConfirmation = false)
+        outState.putString(STATE_SCREEN, screen.name)
+        outState.putLong(STATE_ACTIVE_JOURNAL_ID, activeDraft?.id ?: activeAnalyticsJournalId ?: 0L)
+        outState.putString(STATE_SEARCH_QUERY, journalSearchInput?.text?.toString().orEmpty())
+        super.onSaveInstanceState(outState)
     }
 
     override fun onDestroy() {
@@ -147,15 +160,19 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showNotesScreen(stopVoice: Boolean = true) {
+    private fun showNotesScreen(stopVoice: Boolean = true, initialQuery: String = "") {
         if (stopVoice) {
             stopVoiceInput()
         }
         saveCurrentNote(showConfirmation = false)
+        cancelPendingAutosave()
         activeDraft = null
+        activeAnalyticsJournalId = null
+        draftDirty = false
         screen = Screen.NOTES
         blockList = null
         titleInput = null
+        journalSearchInput = null
         root.removeAllViews()
 
         val content = verticalLayout().apply {
@@ -165,14 +182,10 @@ class MainActivity : Activity() {
         val header = horizontalLayout(Gravity.CENTER_VERTICAL)
         val heading = verticalLayout()
         heading.addChild(
-            label("Voice Journal", 28f, ink, Typeface.BOLD),
-            width = 0,
-            weight = 1f
+            label("Voice Journal", 28f, ink, Typeface.BOLD)
         )
         heading.addChild(
             label("Notes that stay simple, even when your thoughts are not.", 14f, muted),
-            width = 0,
-            weight = 1f,
             top = dp(2)
         )
         header.addChild(heading, width = 0, weight = 1f)
@@ -184,7 +197,7 @@ class MainActivity : Activity() {
 
         content.addChild(
             label(
-                "Dictate a command such as “add to Groceries: checkbox milk”.",
+                "Add to a named journal, speak directly to Default Journal, or ask for entries and trends.",
                 14f,
                 muted
             ),
@@ -208,9 +221,23 @@ class MainActivity : Activity() {
         }
         content.addChild(voiceCommandButton, top = dp(10))
 
+        journalSearchInput = EditText(this).apply {
+            hint = "Search journals and entries"
+            setText(initialQuery)
+            setTextColor(ink)
+            setHintTextColor(muted)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = roundedBackground(surface, line, dp(14))
+            addTextChangedListener(afterTextChanged { refreshNoteList() })
+        }
+        content.addChild(journalSearchInput!!, top = dp(14))
+
         val listHeader = horizontalLayout(Gravity.CENTER_VERTICAL)
         listHeader.addChild(
-            label("Your notes", 18f, ink, Typeface.BOLD),
+            label("Your journals", 18f, ink, Typeface.BOLD),
             width = 0,
             weight = 1f
         )
@@ -237,7 +264,7 @@ class MainActivity : Activity() {
         )
 
         content.addChild(
-            roundedButton("+  New note", accent, Color.WHITE) { showEditorScreen(newNote()) },
+            roundedButton("+  New journal", accent, Color.WHITE) { showEditorScreen(newNote()) },
             top = dp(14)
         )
 

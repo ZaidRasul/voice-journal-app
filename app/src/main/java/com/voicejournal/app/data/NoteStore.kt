@@ -71,6 +71,20 @@ class NoteStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nul
             if (cursor.moveToFirst()) cursor.toNote() else null
         }
 
+    /** Returns the reserved default journal without creating it. */
+    fun findDefaultJournal(): JournalNote? = findMostRecentByTitle(DEFAULT_JOURNAL_TITLE)
+
+    /**
+     * Returns the default journal, creating it on first use. Existing databases
+     * need no schema migration because journals are stored in the notes table.
+     */
+    fun ensureDefaultJournal(): JournalNote =
+        findDefaultJournal() ?: JournalNote(title = DEFAULT_JOURNAL_TITLE).also(::save)
+
+    /** Searches journal titles and entry text without case sensitivity. */
+    fun search(query: String): List<JournalSearchResult> =
+        JournalSearch.filter(listNotes(), query)
+
     fun save(note: JournalNote) {
         note.title = note.title.trim().ifBlank { "Untitled note" }
         if (note.blocks.isEmpty()) {
@@ -101,15 +115,23 @@ class NoteStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nul
         writableDatabase.delete(TABLE_NOTES, "$COLUMN_ID = ?", arrayOf(id.toString()))
     }
 
-    private fun Cursor.toNote(): JournalNote = JournalNote(
-        id = getLong(getColumnIndexOrThrow(COLUMN_ID)),
-        title = getString(getColumnIndexOrThrow(COLUMN_TITLE)),
-        createdAt = getLong(getColumnIndexOrThrow(COLUMN_CREATED_AT)),
-        updatedAt = getLong(getColumnIndexOrThrow(COLUMN_UPDATED_AT)),
-        blocks = NoteCodec.decode(getString(getColumnIndexOrThrow(COLUMN_CONTENT)))
-    )
+    private fun Cursor.toNote(): JournalNote {
+        val createdAt = getLong(getColumnIndexOrThrow(COLUMN_CREATED_AT))
+        return JournalNote(
+            id = getLong(getColumnIndexOrThrow(COLUMN_ID)),
+            title = getString(getColumnIndexOrThrow(COLUMN_TITLE)),
+            createdAt = createdAt,
+            updatedAt = getLong(getColumnIndexOrThrow(COLUMN_UPDATED_AT)),
+            blocks = NoteCodec.decode(
+                raw = getString(getColumnIndexOrThrow(COLUMN_CONTENT)),
+                fallbackCreatedAt = createdAt
+            )
+        )
+    }
 
     companion object {
+        const val DEFAULT_JOURNAL_TITLE = "Default Journal"
+
         private const val DATABASE_NAME = "voice_journal.db"
         private const val DATABASE_VERSION = 1
         private const val TABLE_NOTES = "notes"

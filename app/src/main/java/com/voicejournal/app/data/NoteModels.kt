@@ -23,7 +23,8 @@ data class NoteBlock(
     var type: BlockType = BlockType.TEXT,
     var text: String = "",
     var isChecked: Boolean = false,
-    var style: BlockStyle = BlockStyle.BODY
+    var style: BlockStyle = BlockStyle.BODY,
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 data class JournalNote(
@@ -31,8 +32,49 @@ data class JournalNote(
     var title: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     var updatedAt: Long = createdAt,
-    val blocks: MutableList<NoteBlock> = mutableListOf(NoteBlock())
+    val blocks: MutableList<NoteBlock> = mutableListOf(NoteBlock(createdAt = createdAt))
 )
+
+/**
+ * A journal-level search result. When the title matches, [entries] contains
+ * every entry in that journal; otherwise it contains only matching entries.
+ */
+data class JournalSearchResult(
+    val journal: JournalNote,
+    val entries: List<NoteBlock>,
+    val matchedJournalTitle: Boolean
+)
+
+/** Pure search logic kept separate from Android storage so it is JVM-testable. */
+object JournalSearch {
+    fun filter(journals: List<JournalNote>, query: String): List<JournalSearchResult> {
+        val term = query.trim()
+        if (term.isEmpty()) return emptyList()
+
+        return journals.mapNotNull { journal ->
+            val titleMatches = journal.title.contains(term, ignoreCase = true)
+            val matchingEntries = journal.blocks.filter { entry ->
+                entry.text.contains(term, ignoreCase = true)
+            }
+
+            when {
+                titleMatches -> JournalSearchResult(
+                    journal = journal,
+                    entries = journal.blocks.toList(),
+                    matchedJournalTitle = true
+                )
+
+                matchingEntries.isNotEmpty() -> JournalSearchResult(
+                    journal = journal,
+                    entries = matchingEntries,
+                    matchedJournalTitle = false
+                )
+
+                else -> null
+            }
+        }
+    }
+}
 
 /**
  * The ordered blocks live in one JSON column. This keeps the database tiny
@@ -49,12 +91,16 @@ object NoteCodec {
                     .put("text", block.text)
                     .put("checked", block.isChecked)
                     .put("style", block.style.name)
+                    .put("createdAt", block.createdAt)
             )
         }
         return array.toString()
     }
 
-    fun decode(raw: String): MutableList<NoteBlock> {
+    fun decode(
+        raw: String,
+        fallbackCreatedAt: Long = System.currentTimeMillis()
+    ): MutableList<NoteBlock> {
         val blocks = mutableListOf<NoteBlock>()
         runCatching {
             val array = JSONArray(raw)
@@ -66,12 +112,13 @@ object NoteCodec {
                     type = item.enumValue("type", BlockType.TEXT),
                     text = item.optString("text"),
                     isChecked = item.optBoolean("checked", false),
-                    style = item.enumValue("style", BlockStyle.BODY)
+                    style = item.enumValue("style", BlockStyle.BODY),
+                    createdAt = item.optLong("createdAt", fallbackCreatedAt)
                 )
             }
         }
         if (blocks.isEmpty()) {
-            blocks += NoteBlock()
+            blocks += NoteBlock(createdAt = fallbackCreatedAt)
         }
         return blocks
     }
