@@ -29,19 +29,19 @@ sealed interface VoiceCommandResolution {
  */
 object VoiceCommandParser {
     private val labelledFormat = Regex(
-        """^\s*(?:add|put|write|append)\s+to\s+(.+?)\s*:\s*(.+?)\s*$""",
+        """^\s*(?:please\s+)?(?:add|put|write|append|record|save|log)\s+to\s+(.+?)\s*:\s*(.+?)\s*$""",
         RegexOption.IGNORE_CASE
     )
     private val naturalFormat = Regex(
-        """^\s*(?:add|put|write|append)\s+(.+?)\s+(?:in|into|to)\s+(?:the\s+)?(?:note\s+)?(.+?)\s*[.!?]?\s*$""",
+        """^\s*(?:please\s+)?(?:add|put|write|append|record|save|log)\s+(.+?)\s+(?:in|into|to)\s+(?:the\s+)?(?:(?:note|journal)\s+)?(.+?)\s*[.!?]?\s*$""",
         RegexOption.IGNORE_CASE
     )
     private val targetFirstPrefix = Regex(
-        """^\s*(?:add|put|write|append|record|save|log)\s+(?:this\s+)?(?:entry\s+)?(?:in|into|to)\b\s*(?:the\s+)?""",
+        """^\s*(?:please\s+)?(?:add|put|write|append|record|save|log)\s+(?:(?:(?:this|an?|the)\s+)?(?:entry|note)\s+|this\s+)?(?:in|into|to)\b\s*""",
         RegexOption.IGNORE_CASE
     )
-    private val leadingJournalDescriptor = Regex(
-        """^\s*(?:journal|note)\s+""",
+    private val commandVerbPrefix = Regex(
+        """^\s*(?:please\s+)?(?:add|put|write|append|record|save|log)\s+""",
         RegexOption.IGNORE_CASE
     )
 
@@ -88,41 +88,38 @@ object VoiceCommandParser {
         knownJournalTitles: Collection<String>
     ): VoiceCommandResolution {
         val titleAliases = knownTitleAliases(knownJournalTitles)
-
-        // A colon makes the title/content boundary explicit and may name a new journal.
-        if (labelledFormat.matches(spoken)) {
-            val parsed = parse(spoken) ?: return VoiceCommandResolution.NotACommand
-            return VoiceCommandResolution.Complete(
-                parsed.withCanonicalTitle(titleAliases)
-            )
-        }
-
         val prefix = targetFirstPrefix.find(spoken)
             ?.takeIf { it.range.first == 0 }
         if (prefix == null) {
+            resolveKnownTargetLast(spoken, titleAliases)?.let { command ->
+                return VoiceCommandResolution.Complete(command)
+            }
             val parsed = parse(spoken) ?: return VoiceCommandResolution.NotACommand
             return VoiceCommandResolution.Complete(parsed.withCanonicalTitle(titleAliases))
         }
         val afterPrefix = spoken.substring(prefix.range.last + 1)
 
-        val candidateRemainders = buildList {
-            add(afterPrefix)
-            leadingJournalDescriptor.find(afterPrefix)?.let { descriptor ->
-                add(afterPrefix.substring(descriptor.range.last + 1))
-            }
-        }
-        val (matchedRemainder, matchedTitle) = candidateRemainders.firstNotNullOfOrNull { remainder ->
+        val matchedTarget = targetRemainderCandidates(afterPrefix).firstNotNullOfOrNull { remainder ->
             titleAliases
                 .firstOrNull { title -> titleMatchesStartOf(remainder, title.spokenAlias) }
                 ?.let { remainder to it }
-        } ?: return VoiceCommandResolution.UnresolvedTarget(afterPrefix.cleanSpokenRemainder())
+        }
+        if (matchedTarget == null) {
+            // A colon is an explicit boundary and is allowed to create a new journal.
+            labelledFormat.matchEntire(spoken)?.let {
+                val parsed = parse(spoken) ?: return@let
+                return VoiceCommandResolution.Complete(parsed.withCanonicalTitle(titleAliases))
+            }
+            return VoiceCommandResolution.UnresolvedTarget(afterPrefix.cleanSpokenRemainder())
+        }
+        val (matchedRemainder, matchedTitle) = matchedTarget
 
         val titleMatch = titleAtStartRegex(matchedTitle.spokenAlias).find(matchedRemainder)
             ?: return VoiceCommandResolution.UnresolvedTarget(afterPrefix.cleanSpokenRemainder())
         val content = matchedRemainder
             .substring(titleMatch.range.last + 1)
             .trim()
-            .trimStart(':', ',', ';', '-', '\u2013', '\u2014')
+            .trimStart(':', ',', ';', '.', '!', '?', '-', '\u2013', '\u2014')
             .trim()
 
         if (content.isBlank() || content.all { !it.isLetterOrDigit() }) {
@@ -137,6 +134,49 @@ object VoiceCommandParser {
                 VoiceNoteCommand(matchedTitle.canonicalTitle, block)
             )
         }
+    }
+
+    private fun targetRemainderCandidates(remainder: String): List<String> = buildList {
+        val trimmed = remainder.trimStart()
+        add(trimmed)
+        listOf("the journal ", "the note ", "journal ", "note ", "the ").forEach { prefix ->
+            if (trimmed.startsWith(prefix, ignoreCase = true)) {
+                add(trimmed.drop(prefix.length))
+            }
+        }
+    }.distinct()
+
+    private fun resolveKnownTargetLast(
+        spoken: String,
+        aliases: List<KnownTitleAlias>
+    ): VoiceNoteCommand? {
+        val commandPrefix = commandVerbPrefix.find(spoken)
+            ?.takeIf { it.range.first == 0 }
+            ?: return null
+        val remainder = spoken.substring(commandPrefix.range.last + 1)
+
+        aliases.forEach { title ->
+            val escapedTitle = flexibleTitlePattern(title.spokenAlias)
+            val targets = buildList {
+                add(escapedTitle)
+                add("(?:note|journal)\\s+$escapedTitle")
+                if (!title.spokenAlias.startsWith("the ", ignoreCase = true)) {
+                    add("the\\s+$escapedTitle")
+                    add("the\\s+(?:note|journal)\\s+$escapedTitle")
+                }
+            }
+            targets.forEach { target ->
+                val match = Regex(
+                    """^(.+?)\s+(?:in|into|to)\s+$target\s*[.!?]?\s*$""",
+                    RegexOption.IGNORE_CASE
+                ).matchEntire(remainder) ?: return@forEach
+                val block = match.groupValues[1].toBlock()
+                if (block.text.isNotBlank()) {
+                    return VoiceNoteCommand(title.canonicalTitle, block)
+                }
+            }
+        }
+        return null
     }
 
     /** Converts untargeted speech into a typed entry for the default journal. */
@@ -177,8 +217,13 @@ object VoiceCommandParser {
                     Regex("""\s+journal$""", RegexOption.IGNORE_CASE),
                     ""
                 )
-                if (withoutJournal != title && withoutJournal.isNotBlank()) {
-                    add(KnownTitleAlias(canonicalTitle, withoutJournal, isExact = false))
+                if (withoutJournal != title) {
+                    if (
+                        withoutJournal.isNotBlank() &&
+                        withoutJournal.lowercase(Locale.ROOT) !in AMBIGUOUS_GENERATED_ALIASES
+                    ) {
+                        add(KnownTitleAlias(canonicalTitle, withoutJournal, isExact = false))
+                    }
                 } else {
                     add(KnownTitleAlias(canonicalTitle, "$title Journal", isExact = false))
                 }
@@ -196,14 +241,15 @@ object VoiceCommandParser {
         titleAtStartRegex(title).containsMatchIn(spokenRemainder)
 
     private fun titleAtStartRegex(title: String): Regex {
-        val flexibleWhitespaceTitle = title
-            .split(Regex("\\s+"))
-            .joinToString("\\s+") { Regex.escape(it) }
         return Regex(
-            """^\s*$flexibleWhitespaceTitle(?=\s|[:;,\-.!?]|$)""",
+            """^\s*${flexibleTitlePattern(title)}(?=\s|[:;,\-.!?]|$)""",
             RegexOption.IGNORE_CASE
         )
     }
+
+    private fun flexibleTitlePattern(title: String): String = title
+        .split(Regex("\\s+"))
+        .joinToString("\\s+") { Regex.escape(it) }
 
     private fun String.toBlock(): NoteBlock {
         val cleaned = trim()
@@ -225,4 +271,6 @@ object VoiceCommandParser {
             NoteBlock(type = choice.second, text = cleaned.drop(choice.first.length).trim())
         }
     }
+
+    private val AMBIGUOUS_GENERATED_ALIASES = setOf("a", "an", "my", "the", "this")
 }

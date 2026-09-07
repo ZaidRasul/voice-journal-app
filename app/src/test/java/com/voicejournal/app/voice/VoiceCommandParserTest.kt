@@ -174,4 +174,79 @@ class VoiceCommandParserTest {
 
         assertEquals(VoiceCommandResolution.NotACommand, result)
     }
+
+    @Test
+    fun articleBeforeEntryIsAcceptedInTargetFirstCommand() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "add an entry to Weight 72 kilograms",
+            knownJournalTitles = listOf("Weight")
+        ) as VoiceCommandResolution.Complete
+
+        assertEquals("Weight", result.command.noteTitle)
+        assertEquals("72 kilograms", result.command.block.text)
+    }
+
+    @Test
+    fun titleBeginningWithTheIsNotTreatedAsAnOptionalArticle() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "add to The Weight 72 kilograms",
+            knownJournalTitles = listOf("The Weight", "Weight")
+        ) as VoiceCommandResolution.Complete
+
+        assertEquals("The Weight", result.command.noteTitle)
+        assertEquals("72 kilograms", result.command.block.text)
+    }
+
+    @Test
+    fun shortGeneratedJournalAliasDoesNotHijackContent() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "add to my weight is 72",
+            knownJournalTitles = listOf("My Journal", "Weight")
+        )
+
+        assertTrue(result is VoiceCommandResolution.UnresolvedTarget)
+    }
+
+    @Test
+    fun additionalVerbWorksForTargetLastCommand() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "record 72 kilograms in Weight",
+            knownJournalTitles = listOf("Weight")
+        ) as VoiceCommandResolution.Complete
+
+        assertEquals("Weight", result.command.noteTitle)
+        assertEquals("72 kilograms", result.command.block.text)
+    }
+
+    @Test
+    fun politeTargetFirstCommandDoesNotFallIntoDefault() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "please add to Weight 72 kilograms",
+            knownJournalTitles = listOf("Weight")
+        ) as VoiceCommandResolution.Complete
+
+        assertEquals("Weight", result.command.noteTitle)
+        assertEquals("72 kilograms", result.command.block.text)
+    }
+
+    @Test
+    fun longestKnownTitleMayContainAColon() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "add to Work: Ideas project thought",
+            knownJournalTitles = listOf("Work", "Work: Ideas")
+        ) as VoiceCommandResolution.Complete
+
+        assertEquals("Work: Ideas", result.command.noteTitle)
+        assertEquals("project thought", result.command.block.text)
+    }
+
+    @Test
+    fun recognitionPunctuationBetweenTitleAndContentIsRemoved() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "add to Weight. 72 kilograms",
+            knownJournalTitles = listOf("Weight")
+        ) as VoiceCommandResolution.Complete
+
+        assertEquals("72 kilograms", result.command.block.text)
+    }
 }

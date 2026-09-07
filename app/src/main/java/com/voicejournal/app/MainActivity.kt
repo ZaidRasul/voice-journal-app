@@ -1308,7 +1308,10 @@ class MainActivity : Activity() {
         ) {
             return
         }
-        val preferences = getSharedPreferences(BrainDumpSession.PREFERENCES, MODE_PRIVATE)
+        val preferences = getSharedPreferences(
+            BrainDumpSession.RUNTIME_PREFERENCES,
+            MODE_PRIVATE
+        )
         if (preferences.getBoolean(PREFERENCE_NOTIFICATION_PERMISSION_REQUESTED, false)) {
             return
         }
@@ -1346,11 +1349,14 @@ class MainActivity : Activity() {
 
     private fun syncBrainDumpState(partial: String = "") {
         val state = readCurrentBrainDumpState()
+        val transcriptChanged = state.transcript != brainDumpTranscript
         brainDumpTranscript = state.transcript
         if (screen != Screen.BRAIN_DUMP) {
             return
         }
-        renderBrainDumpTranscript()
+        if (transcriptChanged) {
+            renderBrainDumpTranscript()
+        }
         showVoiceStatus(
             state.status.ifBlank {
                 if (state.isRunning) {

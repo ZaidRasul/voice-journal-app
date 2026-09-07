@@ -14,6 +14,7 @@ object BrainDumpSession {
     const val EXTRA_OPEN_BRAIN_DUMP = "open_brain_dump"
 
     const val PREFERENCES = "voice_journal_preferences"
+    const val RUNTIME_PREFERENCES = "voice_journal_runtime"
     const val LEGACY_TRANSCRIPT_KEY = "rant_draft"
     private const val RUNNING_KEY = "brain_dump_running"
     private const val STATUS_KEY = "brain_dump_status"
@@ -26,10 +27,11 @@ object BrainDumpSession {
 
     fun read(context: Context): State {
         val preferences = preferences(context)
+        val runtimePreferences = runtimePreferences(context)
         return State(
             transcript = preferences.getString(LEGACY_TRANSCRIPT_KEY, "").orEmpty(),
-            isRunning = preferences.getBoolean(RUNNING_KEY, false),
-            status = preferences.getString(STATUS_KEY, "").orEmpty()
+            isRunning = runtimePreferences.getBoolean(RUNNING_KEY, false),
+            status = runtimePreferences.getString(STATUS_KEY, "").orEmpty()
         )
     }
 
@@ -69,7 +71,7 @@ object BrainDumpSession {
         isRunning: Boolean,
         status: String
     ) {
-        preferences(context)
+        runtimePreferences(context)
             .edit()
             .putBoolean(RUNNING_KEY, isRunning)
             .putString(STATUS_KEY, status)
@@ -78,4 +80,7 @@ object BrainDumpSession {
 
     private fun preferences(context: Context) =
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+
+    private fun runtimePreferences(context: Context) =
+        context.getSharedPreferences(RUNTIME_PREFERENCES, Context.MODE_PRIVATE)
 }
