@@ -155,7 +155,7 @@ object VoiceCommandParser {
             ?: return null
         val remainder = spoken.substring(commandPrefix.range.last + 1)
 
-        aliases.forEach { title ->
+        for (title in aliases) {
             val escapedTitle = flexibleTitlePattern(title.spokenAlias)
             val targets = buildList {
                 add(escapedTitle)
@@ -165,11 +165,11 @@ object VoiceCommandParser {
                     add("the\\s+(?:note|journal)\\s+$escapedTitle")
                 }
             }
-            targets.forEach { target ->
+            for (target in targets) {
                 val match = Regex(
                     """^(.+?)\s+(?:in|into|to)\s+$target\s*[.!?]?\s*$""",
                     RegexOption.IGNORE_CASE
-                ).matchEntire(remainder) ?: return@forEach
+                ).matchEntire(remainder) ?: continue
                 val block = match.groupValues[1].toBlock()
                 if (block.text.isNotBlank()) {
                     return VoiceNoteCommand(title.canonicalTitle, block)

@@ -323,6 +323,13 @@ class VoiceInputController(
         }
 
         restartAttempts += 1
+        if (
+            activeMode == VoiceSessionMode.SINGLE_NOTE &&
+            restartAttempts > MAX_SINGLE_TRANSIENT_RETRIES
+        ) {
+            finishWithError("Speech recognition keeps stopping. Please try again.")
+            return
+        }
         val retryDelay = (RESTART_DELAY_MS * restartAttempts)
             .coerceAtMost(MAX_RESTART_DELAY_MS)
         if (!recreateRecognizerForRetry()) {
@@ -353,8 +360,9 @@ class VoiceInputController(
 
     private fun isTransientError(error: Int): Boolean =
         error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS &&
-            error != SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED &&
-            error != SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
+            !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                    error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE))
 
     private fun completeSingle(includePartial: Boolean, stoppedByUser: Boolean = false) {
         if (mode != VoiceSessionMode.SINGLE_NOTE) {
@@ -384,12 +392,21 @@ class VoiceInputController(
             return
         }
 
+        val recoveredBrainDumpText = if (mode == VoiceSessionMode.BRAIN_DUMP) {
+            brainDumpPartial.trim()
+        } else {
+            ""
+        }
         mode = null
         handler.removeCallbacksAndMessages(null)
         singleCompletionPending = false
         singleSegments.reset()
         brainDumpPartial = ""
         releaseRecognizer()
+        onPartial("")
+        if (recoveredBrainDumpText.isNotBlank()) {
+            onFinal(recoveredBrainDumpText)
+        }
         onFailure(message)
     }
 
@@ -455,6 +472,7 @@ class VoiceInputController(
     private companion object {
         const val RESTART_DELAY_MS = 250L
         const val MAX_RESTART_DELAY_MS = 3_000L
+        const val MAX_SINGLE_TRANSIENT_RETRIES = 3
         const val SINGLE_COMPLETION_GRACE_MS = 4_000L
         const val POSSIBLY_COMPLETE_SILENCE_MS = 1_500L
         const val COMPLETE_SILENCE_MS = 2_500L

@@ -115,7 +115,19 @@ class BrainDumpService : Service() {
     }
 
     private fun stopAfterFailure(message: String) {
-        stopSession(message)
+        suppressControllerCallbacks = true
+        sessionActive = false
+        activeInProcess = false
+        BrainDumpSession.updateServiceState(
+            applicationContext,
+            isRunning = false,
+            status = message
+        )
+        publishUpdate()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, buildStoppedNotification(message))
+        stopSelf()
     }
 
     private fun handleRecognitionStatus(status: String) {
@@ -174,15 +186,6 @@ class BrainDumpService : Service() {
     }
 
     private fun buildNotification(status: String): Notification {
-        val openAppIntent = Intent(this, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            .putExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP, true)
-        val openApp = PendingIntent.getActivity(
-            this,
-            OPEN_APP_REQUEST_CODE,
-            openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
         val stopService = PendingIntent.getService(
             this,
             STOP_REQUEST_CODE,
@@ -194,7 +197,7 @@ class BrainDumpService : Service() {
             .setSmallIcon(R.drawable.ic_voice_journal)
             .setContentTitle("Brain Dump is running")
             .setContentText(status)
-            .setContentIntent(openApp)
+            .setContentIntent(openAppPendingIntent())
             .setCategory(Notification.CATEGORY_SERVICE)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -206,6 +209,28 @@ class BrainDumpService : Service() {
                 ).build()
             )
             .build()
+    }
+
+    private fun buildStoppedNotification(status: String): Notification =
+        Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_voice_journal)
+            .setContentTitle("Brain Dump stopped")
+            .setContentText(status)
+            .setContentIntent(openAppPendingIntent())
+            .setCategory(Notification.CATEGORY_ERROR)
+            .setAutoCancel(true)
+            .build()
+
+    private fun openAppPendingIntent(): PendingIntent {
+        val openAppIntent = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP, true)
+        return PendingIntent.getActivity(
+            this,
+            OPEN_APP_REQUEST_CODE,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun createNotificationChannel() {
