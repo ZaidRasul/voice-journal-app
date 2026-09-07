@@ -30,12 +30,21 @@ class VoiceInputController(
 ) : RecognitionListener {
 
     private val handler = Handler(Looper.getMainLooper())
+    private val singleSegments = VoiceSegmentAccumulator()
     private var recognizer: SpeechRecognizer? = null
     private var mode: VoiceSessionMode? = null
     private var segmentFinalized = false
+    private var singleCompletionPending = false
     private var restartAttempts = 0
     private var usingOnDeviceRecognizer = false
     private var standardFallbackAttempted = false
+
+    private val finishSingleAfterPause = Runnable {
+        singleCompletionPending = false
+        if (mode == VoiceSessionMode.SINGLE_NOTE && singleSegments.hasFinalText) {
+            completeSingle(includePartial = false)
+        }
+    }
 
     val isRunning: Boolean
         get() = mode != null
@@ -50,6 +59,11 @@ class VoiceInputController(
 
     fun stop() {
         onMain {
+            if (mode == VoiceSessionMode.SINGLE_NOTE) {
+                completeSingle(includePartial = true, stoppedByUser = true)
+                return@onMain
+            }
+
             mode = null
             handler.removeCallbacksAndMessages(null)
             recognizer?.cancel()
@@ -62,6 +76,8 @@ class VoiceInputController(
         onMain {
             mode = null
             handler.removeCallbacksAndMessages(null)
+            singleCompletionPending = false
+            singleSegments.reset()
             releaseRecognizer()
         }
     }
@@ -69,6 +85,8 @@ class VoiceInputController(
     private fun start(newMode: VoiceSessionMode) {
         mode = null
         handler.removeCallbacksAndMessages(null)
+        singleCompletionPending = false
+        singleSegments.reset()
         releaseRecognizer()
 
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
@@ -97,14 +115,8 @@ class VoiceInputController(
         }
 
         segmentFinalized = false
-        onPartial("")
-        onStatus(
-            if (mode == VoiceSessionMode.RANT) {
-                "Rant mode is listening…"
-            } else {
-                "Listening…"
-            }
-        )
+        onPartial(if (mode == VoiceSessionMode.SINGLE_NOTE) singleSegments.finalText else "")
+        onStatus(listeningStatus())
 
         runCatching {
             recognizer?.startListening(recognitionIntent())
@@ -122,13 +134,24 @@ class VoiceInputController(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                POSSIBLY_COMPLETE_SILENCE_MS
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                COMPLETE_SILENCE_MS
+            )
         }
 
     override fun onReadyForSpeech(params: Bundle?) {
-        onStatus(if (mode == VoiceSessionMode.RANT) "Rant mode is listening…" else "Listening…")
+        onStatus(listeningStatus())
     }
 
     override fun onBeginningOfSpeech() {
+        if (mode == VoiceSessionMode.SINGLE_NOTE) {
+            cancelSingleCompletion()
+        }
         onStatus("Hearing you…")
     }
 
@@ -141,7 +164,7 @@ class VoiceInputController(
     }
 
     override fun onError(error: Int) {
-        if (mode == null) {
+        if (mode == null || segmentFinalized) {
             return
         }
 
@@ -167,9 +190,10 @@ class VoiceInputController(
             return
         }
 
+        val isSilence = error == SpeechRecognizer.ERROR_NO_MATCH ||
+            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
         val shouldRestart = mode == VoiceSessionMode.RANT &&
-            (error == SpeechRecognizer.ERROR_NO_MATCH ||
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+            isSilence
 
         if (shouldRestart) {
             restartAttempts += 1
@@ -177,6 +201,16 @@ class VoiceInputController(
             scheduleRestart(
                 (RESTART_DELAY_MS * restartAttempts).coerceAtMost(MAX_RESTART_DELAY_MS)
             )
+        } else if (
+            mode == VoiceSessionMode.SINGLE_NOTE &&
+            isSilence &&
+            singleSegments.hasFinalText
+        ) {
+            singleSegments.updatePartial("")
+            onPartial(singleSegments.finalText)
+            onStatus(singlePauseStatus())
+            scheduleSingleCompletion()
+            scheduleRestart(RESTART_DELAY_MS)
         } else {
             finishWithError(message)
         }
@@ -196,17 +230,26 @@ class VoiceInputController(
 
         if (transcript.isNotBlank()) {
             restartAttempts = 0
-            onPartial("")
-            onFinal(transcript)
+            if (mode == VoiceSessionMode.SINGLE_NOTE) {
+                singleSegments.addFinal(transcript)
+                onPartial(singleSegments.finalText)
+            } else {
+                onPartial("")
+                onFinal(transcript)
+            }
         }
 
         if (mode == VoiceSessionMode.RANT) {
             onStatus("Saved that thought. Listening again…")
             scheduleRestart(RESTART_DELAY_MS)
+        } else if (singleSegments.hasFinalText) {
+            onStatus(singlePauseStatus())
+            scheduleSingleCompletion()
+            scheduleRestart(RESTART_DELAY_MS)
         } else {
             mode = null
             releaseRecognizer()
-            onStatus("Voice input complete")
+            onFailure("No speech was recognized.")
         }
     }
 
@@ -217,16 +260,26 @@ class VoiceInputController(
         val partial = partialResults
             ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             ?.firstOrNull()
+            ?.trim()
             .orEmpty()
-        onPartial(partial)
+        if (mode == VoiceSessionMode.SINGLE_NOTE) {
+            singleSegments.updatePartial(partial)
+            if (partial.isNotBlank()) {
+                cancelSingleCompletion()
+            }
+            onPartial(singleSegments.previewText)
+        } else {
+            onPartial(partial)
+        }
     }
 
     override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
     private fun scheduleRestart(delayMillis: Long) {
+        val scheduledMode = mode ?: return
         handler.postDelayed(
             {
-                if (mode == VoiceSessionMode.RANT) {
+                if (mode == scheduledMode) {
                     startNextSegment()
                 }
             },
@@ -234,8 +287,51 @@ class VoiceInputController(
         )
     }
 
-    private fun finishWithError(message: String) {
+    private fun scheduleSingleCompletion() {
+        cancelSingleCompletion()
+        singleCompletionPending = true
+        handler.postDelayed(finishSingleAfterPause, SINGLE_COMPLETION_GRACE_MS)
+    }
+
+    private fun cancelSingleCompletion() {
+        if (singleCompletionPending) {
+            handler.removeCallbacks(finishSingleAfterPause)
+            singleCompletionPending = false
+        }
+    }
+
+    private fun completeSingle(includePartial: Boolean, stoppedByUser: Boolean = false) {
+        if (mode != VoiceSessionMode.SINGLE_NOTE) {
+            return
+        }
+
+        val transcript = singleSegments.transcript(includePartial)
         mode = null
+        handler.removeCallbacksAndMessages(null)
+        singleCompletionPending = false
+        recognizer?.cancel()
+        releaseRecognizer()
+        singleSegments.reset()
+        onPartial("")
+
+        if (transcript.isNotBlank()) {
+            onFinal(transcript)
+            onStatus(if (stoppedByUser) "Voice input stopped and saved" else "Voice input complete")
+        } else {
+            onStatus("Voice input stopped")
+        }
+    }
+
+    private fun finishWithError(message: String) {
+        if (mode == VoiceSessionMode.SINGLE_NOTE && singleSegments.hasFinalText) {
+            completeSingle(includePartial = true)
+            return
+        }
+
+        mode = null
+        handler.removeCallbacksAndMessages(null)
+        singleCompletionPending = false
+        singleSegments.reset()
         releaseRecognizer()
         onFailure(message)
     }
@@ -278,6 +374,19 @@ class VoiceInputController(
         else -> "Speech recognition stopped unexpectedly."
     }
 
+    private fun listeningStatus(): String = when (mode) {
+        VoiceSessionMode.RANT -> "Rant mode is listening…"
+        VoiceSessionMode.SINGLE_NOTE -> if (singleSegments.hasFinalText) {
+            singlePauseStatus()
+        } else {
+            "Listening…"
+        }
+        null -> "Voice input stopped"
+    }
+
+    private fun singlePauseStatus(): String =
+        "Keep speaking, or pause 4 seconds to finish…"
+
     private fun onMain(action: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             action()
@@ -289,5 +398,44 @@ class VoiceInputController(
     private companion object {
         const val RESTART_DELAY_MS = 450L
         const val MAX_RESTART_DELAY_MS = 3_000L
+        const val SINGLE_COMPLETION_GRACE_MS = 4_000L
+        const val POSSIBLY_COMPLETE_SILENCE_MS = 2_500L
+        const val COMPLETE_SILENCE_MS = 4_000L
+    }
+}
+
+/** Keeps recognizer sessions separate from the single command delivered to the app. */
+internal class VoiceSegmentAccumulator {
+    private val finalSegments = mutableListOf<String>()
+    private var partialSegment = ""
+
+    val hasFinalText: Boolean
+        get() = finalSegments.isNotEmpty()
+
+    val finalText: String
+        get() = finalSegments.joinToString(" ")
+
+    val previewText: String
+        get() = transcript(includePartial = true)
+
+    fun addFinal(segment: String) {
+        segment.trim().takeIf(String::isNotBlank)?.let(finalSegments::add)
+        partialSegment = ""
+    }
+
+    fun updatePartial(partial: String) {
+        partialSegment = partial.trim()
+    }
+
+    fun transcript(includePartial: Boolean): String = buildList {
+        addAll(finalSegments)
+        if (includePartial && partialSegment.isNotBlank()) {
+            add(partialSegment)
+        }
+    }.joinToString(" ")
+
+    fun reset() {
+        finalSegments.clear()
+        partialSegment = ""
     }
 }
