@@ -112,6 +112,10 @@ class NoteStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, nul
     }
 
     fun delete(id: Long) {
+        val journal = findById(id) ?: return
+        if (journal.title.equals(DEFAULT_JOURNAL_TITLE, ignoreCase = true)) {
+            return
+        }
         writableDatabase.delete(TABLE_NOTES, "$COLUMN_ID = ?", arrayOf(id.toString()))
     }
 

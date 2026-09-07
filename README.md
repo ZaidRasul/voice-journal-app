@@ -9,7 +9,7 @@ checklist entries, and no raw audio is retained.
 - Multiple named journals plus an always-available **Default Journal**
 - Typed or dictated entries with automatic date/time stamps
 - Search across journal names and entry text
-- Voice commands for adding, retrieving, and analyzing entries
+- Voice commands for creating, deleting, adding, retrieving, and analyzing journals
 - Numeric trend summaries and a dependency-free line chart
 - Continuous **Brain Dump** capture that keeps transcribing in the background
   until you stop it, with an ongoing notification and Stop action
@@ -17,6 +17,8 @@ checklist entries, and no raw audio is retained.
 
 Example voice phrases:
 
+- `create a new journal called Travel Plans`
+- `delete journal Travel Plans` (requires confirmation)
 - `add to Weight: numbered 72.4 kilograms`
 - `add to Weight 72.4 kilograms`
 - `show me all entries from weight journal`
@@ -26,7 +28,8 @@ Example voice phrases:
 Voice commands stay open across short recognizer pauses and finish after about
 four seconds without new speech. Target-first commands are matched against the
 journals currently on the phone, so this works with any journal name rather
-than a hard-coded set.
+than a hard-coded set. Voice deletion must name one existing journal and always
+opens a Keep/Delete confirmation. **Default Journal** and bulk deletion are protected.
 
 ## Build and test
 

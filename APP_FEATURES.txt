@@ -9,9 +9,10 @@ speech recognizer instead of bundling a large speech model.
 
 What users can do
 -----------------
-1. Create named journals from the Journals screen. Untargeted voice entries go
-   to an always-available “Default Journal”.
-2. Rename, edit, save, reopen, and delete journals at any time.
+1. Create named journals from the Journals screen or with a voice command.
+   Untargeted voice entries go to an always-available “Default Journal”.
+2. Rename, edit, save, reopen, and delete journals at any time. Voice deletion
+   must match one existing journal and requires a visible confirmation.
 3. Mix several entry types in the same journal:
    - Plain text
    - Bulleted list items
@@ -43,6 +44,8 @@ Voice-command examples
 ----------------------
 The clearest global command format is:
 
+  create a new journal called Travel Plans
+  delete journal Travel Plans
   add to Groceries: checkbox milk
   add to Weight log: numbered 72 kilograms
   add to Weight 72 kilograms
@@ -57,6 +60,10 @@ exist, Voice Journal creates it, then adds the dictated block. Command capture
 waits about four seconds after the latest recognized phrase, so a short thinking
 pause does not submit an incomplete command. Incomplete or unresolved command
 phrases are not saved into Default Journal.
+
+Create/delete commands are available only from the Journals screen's Voice
+command button. Deletion never happens from speech alone: the user must tap
+Delete in a confirmation dialog. Default Journal and bulk deletion are blocked.
 
 Daily and weekly list ideas
 ---------------------------

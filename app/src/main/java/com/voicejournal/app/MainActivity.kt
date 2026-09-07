@@ -48,6 +48,11 @@ import com.voicejournal.app.ui.TimeSeriesPoint
 import com.voicejournal.app.ui.TrendLineChartView
 import com.voicejournal.app.voice.BrainDumpService
 import com.voicejournal.app.voice.BrainDumpSession
+import com.voicejournal.app.voice.JournalManagementCommand
+import com.voicejournal.app.voice.JournalManagementInvalidReason
+import com.voicejournal.app.voice.JournalManagementOperation
+import com.voicejournal.app.voice.JournalManagementResolution
+import com.voicejournal.app.voice.JournalManagementVoiceParser
 import com.voicejournal.app.voice.VoiceCommandParser
 import com.voicejournal.app.voice.VoiceCommandResolution
 import com.voicejournal.app.voice.VoiceInputController
@@ -295,7 +300,7 @@ class MainActivity : Activity() {
 
         content.addChild(
             label(
-                "Add to a named journal, speak directly to Default Journal, or ask for entries and trends.",
+                "Create, delete, or add to a journal, speak to Default Journal, or ask for trends.",
                 14f,
                 muted
             ),
@@ -471,15 +476,27 @@ class MainActivity : Activity() {
             .ifBlank { note.preview() }
     }
 
-    private fun confirmDeleteFromList(note: JournalNote) {
+    private fun confirmDeleteFromList(note: JournalNote, requestedByVoice: Boolean = false) {
         AlertDialog.Builder(this)
             .setTitle("Delete journal?")
             .setMessage("“" + note.title + "” and all its entries will be removed from this phone.")
-            .setNegativeButton("Keep", null)
+            .setNegativeButton("Keep") { _, _ ->
+                if (requestedByVoice) {
+                    showVoiceStatus("Kept “${note.title}”. Nothing was deleted.")
+                }
+            }
             .setPositiveButton("Delete") { _, _ ->
                 noteStore.delete(note.id)
                 refreshNoteList()
+                if (requestedByVoice) {
+                    showVoiceStatus("Deleted “${note.title}”")
+                }
                 toast("Journal deleted")
+            }
+            .setOnCancelListener {
+                if (requestedByVoice) {
+                    showVoiceStatus("Kept “${note.title}”. Nothing was deleted.")
+                }
             }
             .show()
     }
@@ -1422,8 +1439,108 @@ class MainActivity : Activity() {
                 }
             }
 
-            null -> addVoiceCommandToNote(transcript)
+            null -> handleJournalManagementOrEntry(transcript)
         }
+    }
+
+    private fun handleJournalManagementOrEntry(transcript: String) {
+        when (
+            val resolution = JournalManagementVoiceParser.resolve(
+                transcript,
+                noteStore.listNotes().map { it.title }
+            )
+        ) {
+            is JournalManagementResolution.Complete -> when (val command = resolution.command) {
+                is JournalManagementCommand.Create -> createJournalFromVoice(command.journalTitle)
+                is JournalManagementCommand.Delete -> requestJournalDeletionFromVoice(
+                    command.journalTitle
+                )
+            }
+
+            is JournalManagementResolution.Incomplete -> {
+                val message = when (resolution.operation) {
+                    JournalManagementOperation.CREATE ->
+                        "Say the journal name after “create a new journal called”."
+                    JournalManagementOperation.DELETE ->
+                        "Say the full journal name after “delete journal”."
+                }
+                showVoiceStatus("$message Nothing was changed.")
+                toast("Incomplete command — nothing changed")
+            }
+
+            is JournalManagementResolution.Invalid -> {
+                showInvalidJournalManagementCommand(resolution)
+            }
+
+            JournalManagementResolution.NotACommand -> addVoiceCommandToNote(transcript)
+        }
+    }
+
+    private fun createJournalFromVoice(title: String) {
+        val existing = findJournalBySpokenName(title)
+        if (existing != null) {
+            showVoiceStatus("A journal named “${existing.title}” already exists.")
+            toast("Journal already exists — nothing changed")
+            return
+        }
+
+        val journal = JournalNote(title = title)
+        noteStore.save(journal)
+        refreshNoteList()
+        showVoiceStatus("Created journal “${journal.title}”")
+        toast("Journal created")
+    }
+
+    private fun requestJournalDeletionFromVoice(title: String) {
+        val matches = noteStore.listNotes().filter { journal ->
+            journal.title.equals(title, ignoreCase = true)
+        }
+        if (matches.size != 1) {
+            val message = if (matches.isEmpty()) {
+                "No journal named “$title” was found."
+            } else {
+                "More than one journal is named “$title”. Delete it from the journal list."
+            }
+            showVoiceStatus("$message Nothing was deleted.")
+            toast("Journal was not deleted")
+            return
+        }
+
+        val journal = matches.single()
+        val defaultJournalId = noteStore.findDefaultJournal()?.id
+        if (
+            journal.id == defaultJournalId ||
+            journal.title.equals(NoteStore.DEFAULT_JOURNAL_TITLE, ignoreCase = true)
+        ) {
+            showVoiceStatus("Default Journal is protected and cannot be deleted.")
+            toast("Default Journal cannot be deleted")
+            return
+        }
+
+        showVoiceStatus("Confirm whether to delete “${journal.title}”.")
+        confirmDeleteFromList(journal, requestedByVoice = true)
+    }
+
+    private fun showInvalidJournalManagementCommand(
+        resolution: JournalManagementResolution.Invalid
+    ) {
+        val title = resolution.requestedTitle
+        val message = when (resolution.reason) {
+            JournalManagementInvalidReason.ALREADY_EXISTS ->
+                "A journal named “$title” already exists."
+            JournalManagementInvalidReason.NOT_FOUND ->
+                "No journal matching “$title” was found."
+            JournalManagementInvalidReason.AMBIGUOUS ->
+                "More than one journal matches “$title”. Use the journal list instead."
+            JournalManagementInvalidReason.UNSAFE_TARGET ->
+                "Voice commands cannot delete multiple journals."
+            JournalManagementInvalidReason.REQUIRE_JOURNAL_WORD ->
+                "For safety, say “delete journal” followed by the full name."
+            JournalManagementInvalidReason.MALFORMED ->
+                "Use one command and one journal name at a time."
+        }
+        showVoiceStatus("$message Nothing was changed.")
+        toast("Journal command not completed")
     }
 
     private fun addVoiceCommandToNote(transcript: String) {
