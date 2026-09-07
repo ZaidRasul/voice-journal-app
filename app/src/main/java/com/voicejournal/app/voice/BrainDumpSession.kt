@@ -13,8 +13,8 @@ object BrainDumpSession {
         "com.voicejournal.app.action.BRAIN_DUMP_STATE_CHANGED"
     const val EXTRA_OPEN_BRAIN_DUMP = "open_brain_dump"
 
-    private const val PREFERENCES = "voice_journal_preferences"
-    private const val TRANSCRIPT_KEY = "rant_draft"
+    const val PREFERENCES = "voice_journal_preferences"
+    const val LEGACY_TRANSCRIPT_KEY = "rant_draft"
     private const val RUNNING_KEY = "brain_dump_running"
     private const val STATUS_KEY = "brain_dump_status"
 
@@ -27,14 +27,20 @@ object BrainDumpSession {
     fun read(context: Context): State {
         val preferences = preferences(context)
         return State(
-            transcript = preferences.getString(TRANSCRIPT_KEY, "").orEmpty(),
+            transcript = preferences.getString(LEGACY_TRANSCRIPT_KEY, "").orEmpty(),
             isRunning = preferences.getBoolean(RUNNING_KEY, false),
             status = preferences.getString(STATUS_KEY, "").orEmpty()
         )
     }
 
+    fun readTranscript(context: Context): String = read(context).transcript
+
+    fun isRunning(context: Context): Boolean = read(context).isRunning
+
+    fun readStatus(context: Context): String = read(context).status
+
     fun clearTranscript(context: Context) {
-        preferences(context).edit().remove(TRANSCRIPT_KEY).apply()
+        preferences(context).edit().remove(LEGACY_TRANSCRIPT_KEY).apply()
     }
 
     internal fun appendTranscript(context: Context, text: String): String {
@@ -44,13 +50,13 @@ object BrainDumpSession {
         }
 
         val preferences = preferences(context)
-        val existing = preferences.getString(TRANSCRIPT_KEY, "").orEmpty()
+        val existing = preferences.getString(LEGACY_TRANSCRIPT_KEY, "").orEmpty()
         val updated = if (existing.isBlank()) {
             cleanText
         } else {
             existing.trimEnd() + "\n\n" + cleanText
         }
-        preferences.edit().putString(TRANSCRIPT_KEY, updated).apply()
+        preferences.edit().putString(LEGACY_TRANSCRIPT_KEY, updated).apply()
         return updated
     }
 

@@ -104,6 +104,16 @@ class VoiceCommandParserTest {
     }
 
     @Test
+    fun unfinishedCommandWithoutEvenATitleNeedsClarification() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "add to",
+            knownJournalTitles = listOf("Default Journal", "Weight")
+        )
+
+        assertEquals(VoiceCommandResolution.UnresolvedTarget(""), result)
+    }
+
+    @Test
     fun journalSuffixMayBeOmittedWhenSpeakingExistingTitle() {
         val result = VoiceCommandParser.resolve(
             spoken = "add to Gratitude three good things happened",

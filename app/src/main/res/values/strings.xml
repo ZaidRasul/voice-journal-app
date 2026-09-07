@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Voice Journal</string>
-    <string name="rant_empty_transcript">Your spoken thoughts will appear here.</string>
+    <string name="brain_dump_empty_transcript">Your spoken thoughts will appear here.</string>
 </resources>

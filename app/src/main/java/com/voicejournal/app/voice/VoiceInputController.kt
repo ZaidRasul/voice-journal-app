@@ -17,9 +17,9 @@ enum class VoiceSessionMode {
 }
 
 /**
- * Thin lifecycle-aware wrapper around the phone's speech service. It persists
- * only final results; partial phrases are display-only so they cannot duplicate
- * text in a note.
+ * Thin lifecycle-aware wrapper around the phone's speech service. Confirmed
+ * one-shot segments are accumulated across recognizer endpoint pauses. A partial
+ * segment is included only when the user explicitly stops that one-shot session.
  */
 class VoiceInputController(
     private val context: Context,
@@ -254,7 +254,7 @@ class VoiceInputController(
     }
 
     override fun onPartialResults(partialResults: Bundle?) {
-        if (mode == null) {
+        if (mode == null || segmentFinalized) {
             return
         }
         val partial = partialResults
@@ -375,7 +375,7 @@ class VoiceInputController(
     }
 
     private fun listeningStatus(): String = when (mode) {
-        VoiceSessionMode.RANT -> "Rant mode is listening…"
+        VoiceSessionMode.RANT -> "Brain Dump is listening…"
         VoiceSessionMode.SINGLE_NOTE -> if (singleSegments.hasFinalText) {
             singlePauseStatus()
         } else {
@@ -419,7 +419,10 @@ internal class VoiceSegmentAccumulator {
         get() = transcript(includePartial = true)
 
     fun addFinal(segment: String) {
-        segment.trim().takeIf(String::isNotBlank)?.let(finalSegments::add)
+        val normalized = segment.trim()
+        if (normalized.isNotBlank()) {
+            finalSegments += normalized
+        }
         partialSegment = ""
     }
 

@@ -12,9 +12,9 @@ data class VoiceNoteCommand(
 /**
  * Result of resolving speech with the journals that currently exist.
  *
- * [Incomplete] is deliberately different from [NotACommand]: callers should
- * ask the user for the missing entry instead of saving the command words in
- * the default journal.
+ * [Incomplete] and [UnresolvedTarget] are deliberately different from
+ * [NotACommand]: callers should ask the user for clarification instead of
+ * saving command words in the default journal.
  */
 sealed interface VoiceCommandResolution {
     data class Complete(val command: VoiceNoteCommand) : VoiceCommandResolution
@@ -37,7 +37,11 @@ object VoiceCommandParser {
         RegexOption.IGNORE_CASE
     )
     private val targetFirstPrefix = Regex(
-        """^\s*(?:add|put|write|append|record|save|log)\s+(?:this\s+)?(?:entry\s+)?(?:in|into|to)\s+(?:the\s+)?(?:journal\s+|note\s+)?""",
+        """^\s*(?:add|put|write|append|record|save|log)\s+(?:this\s+)?(?:entry\s+)?(?:in|into|to)\b\s*(?:the\s+)?""",
+        RegexOption.IGNORE_CASE
+    )
+    private val leadingJournalDescriptor = Regex(
+        """^\s*(?:journal|note)\s+""",
         RegexOption.IGNORE_CASE
     )
 
@@ -97,13 +101,22 @@ object VoiceCommandParser {
             ?: return VoiceCommandResolution.NotACommand
         val afterPrefix = spoken.substring(prefix.range.last + 1)
 
-        val matchedTitle = knownTitleAliases(knownJournalTitles)
-            .firstOrNull { title -> titleMatchesStartOf(afterPrefix, title.spokenAlias) }
-            ?: return VoiceCommandResolution.UnresolvedTarget(afterPrefix.cleanSpokenRemainder())
+        val titleAliases = knownTitleAliases(knownJournalTitles)
+        val candidateRemainders = buildList {
+            add(afterPrefix)
+            leadingJournalDescriptor.find(afterPrefix)?.let { descriptor ->
+                add(afterPrefix.substring(descriptor.range.last + 1))
+            }
+        }
+        val (matchedRemainder, matchedTitle) = candidateRemainders.firstNotNullOfOrNull { remainder ->
+            titleAliases
+                .firstOrNull { title -> titleMatchesStartOf(remainder, title.spokenAlias) }
+                ?.let { remainder to it }
+        } ?: return VoiceCommandResolution.UnresolvedTarget(afterPrefix.cleanSpokenRemainder())
 
-        val titleMatch = titleAtStartRegex(matchedTitle.spokenAlias).find(afterPrefix)
+        val titleMatch = titleAtStartRegex(matchedTitle.spokenAlias).find(matchedRemainder)
             ?: return VoiceCommandResolution.UnresolvedTarget(afterPrefix.cleanSpokenRemainder())
-        val content = afterPrefix
+        val content = matchedRemainder
             .substring(titleMatch.range.last + 1)
             .trim()
             .trimStart(':', ',', ';', '-', '\u2013', '\u2014')

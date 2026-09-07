@@ -4,7 +4,10 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -43,7 +46,10 @@ import com.voicejournal.app.data.NoteStore
 import com.voicejournal.app.data.preview
 import com.voicejournal.app.ui.TimeSeriesPoint
 import com.voicejournal.app.ui.TrendLineChartView
+import com.voicejournal.app.voice.BrainDumpService
+import com.voicejournal.app.voice.BrainDumpSession
 import com.voicejournal.app.voice.VoiceCommandParser
+import com.voicejournal.app.voice.VoiceCommandResolution
 import com.voicejournal.app.voice.VoiceInputController
 import com.voicejournal.app.voice.VoiceQuery
 import com.voicejournal.app.voice.VoiceQueryParser
@@ -72,12 +78,21 @@ class MainActivity : Activity() {
     private var titleInput: EditText? = null
     private var voiceStatus: TextView? = null
     private var voicePartial: TextView? = null
-    private var rantTranscriptView: TextView? = null
-    private var rantScrollView: ScrollView? = null
+    private var brainDumpTranscriptView: TextView? = null
+    private var brainDumpScrollView: ScrollView? = null
 
     private var pendingVoiceTarget: VoiceTarget? = null
     private var activeVoiceTarget: VoiceTarget? = null
-    private var rantTranscript = ""
+    private var brainDumpTranscript = ""
+    private var brainDumpReceiverRegistered = false
+
+    private val brainDumpUpdateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            syncBrainDumpState(
+                partial = intent?.getStringExtra(BrainDumpService.EXTRA_PARTIAL_TRANSCRIPT).orEmpty()
+            )
+        }
+    }
 
     private val paper = Color.rgb(248, 247, 242)
     private val surface = Color.WHITE
@@ -93,9 +108,7 @@ class MainActivity : Activity() {
 
         noteStore = NoteStore(applicationContext)
         noteStore.ensureDefaultJournal()
-        rantTranscript = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
-            .getString(PREFERENCE_RANT_DRAFT, "")
-            .orEmpty()
+        brainDumpTranscript = BrainDumpSession.read(this).transcript
 
         root = FrameLayout(this).apply {
             setBackgroundColor(paper)
@@ -112,7 +125,17 @@ class MainActivity : Activity() {
         )
 
         configureBackNavigation()
-        restoreScreen(savedInstanceState)
+        if (intent.getBooleanExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP, false)) {
+            showBrainDumpScreen()
+        } else {
+            restoreScreen(savedInstanceState)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        registerBrainDumpReceiver()
+        syncBrainDumpState()
     }
 
     override fun onStop() {
@@ -121,7 +144,16 @@ class MainActivity : Activity() {
             activeVoiceTarget = null
         }
         saveCurrentNote(showConfirmation = false)
+        unregisterBrainDumpReceiver()
         super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent?.getBooleanExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP, false) == true) {
+            showBrainDumpScreen()
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -147,6 +179,9 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATIONS) {
+            return
+        }
         if (requestCode != REQUEST_RECORD_AUDIO) {
             return
         }
@@ -193,10 +228,11 @@ class MainActivity : Activity() {
     }
 
     private fun restoreScreen(savedInstanceState: Bundle?) {
-        val restoredScreen = savedInstanceState
-            ?.getString(STATE_SCREEN)
-            ?.let { savedName -> Screen.entries.firstOrNull { it.name == savedName } }
-            ?: Screen.NOTES
+        val restoredScreen = when (val savedName = savedInstanceState?.getString(STATE_SCREEN)) {
+            "RANT" -> Screen.BRAIN_DUMP
+            null -> Screen.NOTES
+            else -> Screen.entries.firstOrNull { it.name == savedName } ?: Screen.NOTES
+        }
         val journalId = savedInstanceState?.getLong(STATE_ACTIVE_JOURNAL_ID) ?: 0L
         when (restoredScreen) {
             Screen.EDITOR -> {
@@ -204,7 +240,7 @@ class MainActivity : Activity() {
                 showEditorScreen(journal)
             }
 
-            Screen.RANT -> showRantScreen()
+            Screen.BRAIN_DUMP -> showBrainDumpScreen()
             Screen.ANALYTICS -> {
                 val journal = journalId.takeIf { it != 0L }?.let(noteStore::findById)
                 if (journal == null) showNotesScreen(stopVoice = false) else showAnalyticsScreen(journal)
@@ -248,7 +284,9 @@ class MainActivity : Activity() {
         )
         header.addChild(heading, width = 0, weight = 1f)
         header.addChild(
-            roundedButton("🎙  Rant", accentSoft, accent) { showRantScreen(autoStart = true) },
+            roundedButton("🧠  Brain Dump", accentSoft, accent) {
+                showBrainDumpScreen(autoStart = true)
+            },
             left = dp(8)
         )
         content.addChild(header)
@@ -986,7 +1024,7 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun showRantScreen(autoStart: Boolean = false) {
+    private fun showBrainDumpScreen(autoStart: Boolean = false) {
         stopVoiceInput()
         saveCurrentNote(showConfirmation = false)
         cancelPendingAutosave()
@@ -997,8 +1035,11 @@ class MainActivity : Activity() {
         noteList = null
         blockList = null
         titleInput = null
-        screen = Screen.RANT
+        screen = Screen.BRAIN_DUMP
         root.removeAllViews()
+
+        val session = BrainDumpSession.read(this)
+        brainDumpTranscript = session.transcript
 
         val content = verticalLayout().apply {
             setPadding(dp(16), dp(14), dp(16), dp(14))
@@ -1010,19 +1051,20 @@ class MainActivity : Activity() {
             height = dp(44)
         )
         header.addChild(
-            label("Rant mode", 22f, ink, Typeface.BOLD),
+            label("Brain Dump", 22f, ink, Typeface.BOLD),
             width = 0,
             weight = 1f,
             left = dp(12)
         )
         header.addChild(
-            roundedButton("Clear", Color.TRANSPARENT, danger) { confirmClearRant() }
+            roundedButton("Clear", Color.TRANSPARENT, danger) { confirmClearBrainDump() }
         )
         content.addChild(header)
 
         content.addChild(
             label(
-                "This space just writes. It never runs voice commands. Stop when you need a breath.",
+                "Capture as many thoughts as you like. Pauses are fine, commands are ignored, " +
+                    "and listening continues in the background until you tap Stop.",
                 14f,
                 muted
             ),
@@ -1030,7 +1072,14 @@ class MainActivity : Activity() {
         )
 
         voiceStatus = label(
-            if (autoStart) "Preparing the microphone…" else "Tap Start rant when you are ready.",
+            when {
+                session.isRunning -> session.status.ifBlank {
+                    "Brain Dump is listening in the background…"
+                }
+                autoStart -> "Preparing the microphone…"
+                session.status.isNotBlank() -> session.status
+                else -> "Tap Start Brain Dump when you are ready."
+            },
             13f,
             accent
         ).also {
@@ -1048,36 +1097,38 @@ class MainActivity : Activity() {
 
         val controls = horizontalLayout(Gravity.CENTER_VERTICAL)
         controls.addChild(
-            roundedButton("▶  Start rant", accent, Color.WHITE) {
-                beginVoice(VoiceTarget.RANT)
+            roundedButton("▶  Start Brain Dump", accent, Color.WHITE) {
+                beginVoice(VoiceTarget.BRAIN_DUMP)
             },
             width = 0,
             weight = 1f
         )
         controls.addChild(
             roundedButton("■  Stop", accentSoft, accent) {
-                stopVoiceInput()
+                stopBrainDump()
             },
             left = dp(8)
         )
         content.addChild(controls, top = dp(8))
         content.addChild(
-            roundedButton("Save transcript as journal", surface, accent) { saveRantAsNote() },
+            roundedButton("Save transcript as journal", surface, accent) {
+                saveBrainDumpAsNote()
+            },
             top = dp(8)
         )
 
-        rantTranscriptView = label("", 17f, ink).apply {
+        brainDumpTranscriptView = label("", 17f, ink).apply {
             setTextIsSelectable(true)
             minHeight = dp(140)
             gravity = Gravity.TOP
             setPadding(dp(16), dp(18), dp(16), dp(18))
             background = roundedBackground(surface, line, dp(18))
         }
-        rantScrollView = ScrollView(this).apply {
+        brainDumpScrollView = ScrollView(this).apply {
             isFillViewport = true
             setPadding(0, dp(8), 0, dp(8))
             addView(
-                rantTranscriptView,
+                brainDumpTranscriptView,
                 ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1085,7 +1136,7 @@ class MainActivity : Activity() {
             )
         }
         content.addChild(
-            rantScrollView!!,
+            brainDumpScrollView!!,
             width = ViewGroup.LayoutParams.MATCH_PARENT,
             height = 0,
             weight = 1f,
@@ -1098,58 +1149,56 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
-        renderRantTranscript()
-        if (autoStart) {
-            root.post { beginVoice(VoiceTarget.RANT) }
+        renderBrainDumpTranscript()
+        if (autoStart && !session.isRunning) {
+            root.post { beginVoice(VoiceTarget.BRAIN_DUMP) }
         }
     }
 
-    private fun renderRantTranscript() {
-        val view = rantTranscriptView ?: return
-        if (rantTranscript.isBlank()) {
-            view.text = getString(R.string.rant_empty_transcript)
+    private fun renderBrainDumpTranscript() {
+        val view = brainDumpTranscriptView ?: return
+        if (brainDumpTranscript.isBlank()) {
+            view.text = getString(R.string.brain_dump_empty_transcript)
             view.setTextColor(muted)
             view.setTypeface(Typeface.DEFAULT, Typeface.ITALIC)
         } else {
-            view.text = rantTranscript
+            view.text = brainDumpTranscript
             view.setTextColor(ink)
             view.setTypeface(Typeface.DEFAULT, Typeface.NORMAL)
-            rantScrollView?.post { rantScrollView?.fullScroll(View.FOCUS_DOWN) }
+            brainDumpScrollView?.post { brainDumpScrollView?.fullScroll(View.FOCUS_DOWN) }
         }
     }
 
-    private fun confirmClearRant() {
-        if (rantTranscript.isBlank()) {
+    private fun confirmClearBrainDump() {
+        if (brainDumpTranscript.isBlank()) {
             return
         }
         AlertDialog.Builder(this)
-            .setTitle("Clear rant transcript?")
-            .setMessage("This clears the unsaved rant text. Saved journals stay untouched.")
+            .setTitle("Clear Brain Dump transcript?")
+            .setMessage("This clears the unsaved Brain Dump text. Saved journals stay untouched.")
             .setNegativeButton("Keep", null)
             .setPositiveButton("Clear") { _, _ ->
-                rantTranscript = ""
-                getSharedPreferences(PREFERENCES, MODE_PRIVATE)
-                    .edit()
-                    .remove(PREFERENCE_RANT_DRAFT)
-                    .apply()
-                renderRantTranscript()
+                brainDumpTranscript = ""
+                BrainDumpSession.clearTranscript(this)
+                renderBrainDumpTranscript()
             }
             .show()
     }
 
-    private fun saveRantAsNote() {
-        if (rantTranscript.isBlank()) {
-            toast("No transcript yet. Tap Start rant, allow microphone access, and speak.")
+    private fun saveBrainDumpAsNote() {
+        brainDumpTranscript = BrainDumpSession.read(this).transcript
+        if (brainDumpTranscript.isBlank()) {
+            toast("No transcript yet. Tap Start Brain Dump, allow microphone access, and speak.")
             return
         }
-        val title = "Rant " + DateFormat.getDateTimeInstance(
+        val title = "Brain Dump " + DateFormat.getDateTimeInstance(
             DateFormat.MEDIUM,
             DateFormat.SHORT,
             Locale.getDefault()
         ).format(Date())
         val note = JournalNote(
             title = title,
-            blocks = mutableListOf(NoteBlock(type = BlockType.TEXT, text = rantTranscript))
+            blocks = mutableListOf(NoteBlock(type = BlockType.TEXT, text = brainDumpTranscript))
         )
         noteStore.save(note)
         toast("Transcript saved as a journal")
@@ -1161,12 +1210,16 @@ class MainActivity : Activity() {
         ) {
             pendingVoiceTarget = target
             if (shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+                val explanation = if (target == VoiceTarget.BRAIN_DUMP) {
+                    "Brain Dump uses the microphone while it is running, including when the app " +
+                        "is in the background. It stops when you tap Stop and saves text, not raw audio."
+                } else {
+                    "Voice Journal needs microphone access while you dictate. It saves the " +
+                        "recognized text, not raw audio."
+                }
                 AlertDialog.Builder(this)
                     .setTitle("Microphone permission needed")
-                    .setMessage(
-                        "Voice Journal needs microphone access only while you are actively dictating. " +
-                            "It saves the recognized text, not raw audio."
-                    )
+                    .setMessage(explanation)
                     .setNegativeButton("Not now") { _, _ ->
                         pendingVoiceTarget = null
                         showVoiceStatus("Microphone permission is required to transcribe speech.")
@@ -1205,12 +1258,22 @@ class MainActivity : Activity() {
     }
 
     private fun startVoice(target: VoiceTarget) {
-        activeVoiceTarget = target
-        if (target == VoiceTarget.RANT) {
-            voiceInput.startRant()
-        } else {
-            voiceInput.startSingle()
+        if (target == VoiceTarget.BRAIN_DUMP) {
+            activeVoiceTarget = null
+            showVoiceStatus("Starting Brain Dump…")
+            try {
+                BrainDumpService.start(this)
+                requestNotificationPermissionIfNeeded()
+            } catch (_: RuntimeException) {
+                showVoiceFailure(
+                    "Brain Dump could not start. Keep the app open, check microphone access, and try again."
+                )
+            }
+            return
         }
+
+        activeVoiceTarget = target
+        voiceInput.startSingle()
     }
 
     private fun stopVoiceInput() {
@@ -1221,17 +1284,85 @@ class MainActivity : Activity() {
         showVoicePartial("")
     }
 
+    private fun stopBrainDump() {
+        showVoicePartial("")
+        showVoiceStatus("Stopping Brain Dump…")
+        try {
+            BrainDumpService.stop(this)
+        } catch (_: RuntimeException) {
+            showVoiceFailure("Brain Dump could not be stopped from this screen. Try the notification.")
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val preferences = getSharedPreferences(BrainDumpSession.PREFERENCES, MODE_PRIVATE)
+        if (preferences.getBoolean(PREFERENCE_NOTIFICATION_PERMISSION_REQUESTED, false)) {
+            return
+        }
+        preferences.edit()
+            .putBoolean(PREFERENCE_NOTIFICATION_PERMISSION_REQUESTED, true)
+            .apply()
+        requestPermissions(
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_NOTIFICATIONS
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun registerBrainDumpReceiver() {
+        if (brainDumpReceiverRegistered) {
+            return
+        }
+        val filter = IntentFilter(BrainDumpSession.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(brainDumpUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(brainDumpUpdateReceiver, filter)
+        }
+        brainDumpReceiverRegistered = true
+    }
+
+    private fun unregisterBrainDumpReceiver() {
+        if (!brainDumpReceiverRegistered) {
+            return
+        }
+        unregisterReceiver(brainDumpUpdateReceiver)
+        brainDumpReceiverRegistered = false
+    }
+
+    private fun syncBrainDumpState(partial: String = "") {
+        val state = BrainDumpSession.read(this)
+        brainDumpTranscript = state.transcript
+        if (screen != Screen.BRAIN_DUMP) {
+            return
+        }
+        renderBrainDumpTranscript()
+        showVoiceStatus(
+            state.status.ifBlank {
+                if (state.isRunning) {
+                    "Brain Dump is listening in the background…"
+                } else {
+                    "Tap Start Brain Dump when you are ready."
+                }
+            }
+        )
+        showVoicePartial(partial)
+    }
+
     private fun handleFinalVoiceText(transcript: String) {
         when (activeVoiceTarget) {
             VoiceTarget.HOME_COMMAND -> handleHomeVoice(transcript)
             VoiceTarget.ACTIVE_NOTE -> appendToActiveNote(transcript)
-            VoiceTarget.RANT -> appendToRant(transcript)
+            VoiceTarget.BRAIN_DUMP -> Unit
             null -> Unit
         }
-
-        if (activeVoiceTarget != VoiceTarget.RANT) {
-            activeVoiceTarget = null
-        }
+        activeVoiceTarget = null
     }
 
     private fun handleHomeVoice(transcript: String) {
@@ -1269,26 +1400,53 @@ class MainActivity : Activity() {
     }
 
     private fun addVoiceCommandToNote(transcript: String) {
-        val command = VoiceCommandParser.parse(transcript)
-        if (command == null) {
-            val target = noteStore.ensureDefaultJournal()
-            val entry = VoiceCommandParser.parseEntry(transcript)
-            appendJournalEntry(target, entry)
-            noteStore.save(target)
-            refreshNoteList()
-            showVoiceStatus("Added to “${target.title}”")
-            toast("Voice entry saved")
-            return
-        }
+        when (
+            val resolution = VoiceCommandParser.resolve(
+                transcript,
+                noteStore.listNotes().map { it.title }
+            )
+        ) {
+            is VoiceCommandResolution.Complete -> {
+                val command = resolution.command
+                val existing = noteStore.findMostRecentByTitle(command.noteTitle)
+                val target = existing ?: JournalNote(title = command.noteTitle)
+                appendJournalEntry(target, command.block)
+                noteStore.save(target)
+                refreshNoteList()
+                val outcome = if (existing == null) "Created " else "Added to "
+                showVoiceStatus(outcome + "“" + target.title + "”")
+                toast("Voice text saved")
+            }
 
-        val existing = noteStore.findMostRecentByTitle(command.noteTitle)
-        val target = existing ?: JournalNote(title = command.noteTitle)
-        appendJournalEntry(target, command.block)
-        noteStore.save(target)
-        refreshNoteList()
-        val outcome = if (existing == null) "Created " else "Added to "
-        showVoiceStatus(outcome + "“" + target.title + "”")
-        toast("Voice text saved")
+            is VoiceCommandResolution.Incomplete -> {
+                showVoiceStatus(
+                    "I heard “${resolution.noteTitle}”, but not the entry. " +
+                        "Try again and say what to add after the journal name."
+                )
+                toast("Incomplete command — nothing was saved")
+            }
+
+            is VoiceCommandResolution.UnresolvedTarget -> {
+                val detail = resolution.spokenRemainder.takeIf { it.isNotBlank() }
+                    ?.let { " I heard “$it”." }
+                    .orEmpty()
+                showVoiceStatus(
+                    "I couldn't match that command to a journal.$detail " +
+                        "Try: add to Journal name, followed by your entry."
+                )
+                toast("Journal not recognized — nothing was saved")
+            }
+
+            VoiceCommandResolution.NotACommand -> {
+                val target = noteStore.ensureDefaultJournal()
+                val entry = VoiceCommandParser.parseEntry(transcript)
+                appendJournalEntry(target, entry)
+                noteStore.save(target)
+                refreshNoteList()
+                showVoiceStatus("Added to “${target.title}”")
+                toast("Voice entry saved")
+            }
+        }
     }
 
     private fun appendToActiveNote(transcript: String) {
@@ -1320,19 +1478,6 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun appendToRant(transcript: String) {
-        rantTranscript = if (rantTranscript.isBlank()) {
-            transcript
-        } else {
-            rantTranscript.trimEnd() + "\n\n" + transcript
-        }
-        getSharedPreferences(PREFERENCES, MODE_PRIVATE)
-            .edit()
-            .putString(PREFERENCE_RANT_DRAFT, rantTranscript)
-            .apply()
-        renderRantTranscript()
-    }
-
     private fun showVoiceStatus(message: String) {
         voiceStatus?.text = message
     }
@@ -1353,7 +1498,7 @@ class MainActivity : Activity() {
     private fun navigateBack() {
         when (screen) {
             Screen.NOTES -> finish()
-            Screen.EDITOR, Screen.RANT, Screen.ANALYTICS -> showNotesScreen()
+            Screen.EDITOR, Screen.BRAIN_DUMP, Screen.ANALYTICS -> showNotesScreen()
         }
     }
 
@@ -1487,21 +1632,22 @@ class MainActivity : Activity() {
     private enum class Screen {
         NOTES,
         EDITOR,
-        RANT,
+        BRAIN_DUMP,
         ANALYTICS
     }
 
     private enum class VoiceTarget {
         HOME_COMMAND,
         ACTIVE_NOTE,
-        RANT
+        BRAIN_DUMP
     }
 
     private companion object {
         const val REQUEST_RECORD_AUDIO = 401
+        const val REQUEST_NOTIFICATIONS = 402
         const val AUTOSAVE_DELAY_MS = 650L
-        const val PREFERENCES = "voice_journal_preferences"
-        const val PREFERENCE_RANT_DRAFT = "rant_draft"
+        const val PREFERENCE_NOTIFICATION_PERMISSION_REQUESTED =
+            "brain_dump_notification_permission_requested"
         const val STATE_SCREEN = "screen"
         const val STATE_ACTIVE_JOURNAL_ID = "active_journal_id"
         const val STATE_SEARCH_QUERY = "search_query"
