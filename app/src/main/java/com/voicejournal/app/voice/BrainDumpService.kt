@@ -42,13 +42,14 @@ class BrainDumpService : Service() {
             ACTION_STOP -> stopSession("Brain Dump stopped")
             else -> startSession()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         suppressControllerCallbacks = true
+        activeInProcess = false
         voiceInput.destroy()
         if (sessionActive) {
             sessionActive = false
@@ -85,6 +86,7 @@ class BrainDumpService : Service() {
         }
 
         sessionActive = true
+        activeInProcess = true
         suppressControllerCallbacks = false
         BrainDumpSession.updateServiceState(
             applicationContext,
@@ -96,11 +98,12 @@ class BrainDumpService : Service() {
     }
 
     private fun stopSession(status: String) {
-        suppressControllerCallbacks = true
-        sessionActive = false
-        if (::voiceInput.isInitialized) {
+        if (sessionActive && ::voiceInput.isInitialized) {
             voiceInput.stop()
         }
+        suppressControllerCallbacks = true
+        sessionActive = false
+        activeInProcess = false
         BrainDumpSession.updateServiceState(
             applicationContext,
             isRunning = false,
@@ -151,7 +154,7 @@ class BrainDumpService : Service() {
 
     private fun promoteToForeground(status: String) {
         val notification = buildNotification(status)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
@@ -220,6 +223,9 @@ class BrainDumpService : Service() {
     companion object {
         const val EXTRA_PARTIAL_TRANSCRIPT = "partial_transcript"
 
+        @Volatile
+        private var activeInProcess = false
+
         private const val ACTION_START = "com.voicejournal.app.action.START_BRAIN_DUMP"
         private const val ACTION_STOP = "com.voicejournal.app.action.STOP_BRAIN_DUMP"
         private const val NOTIFICATION_CHANNEL_ID = "brain_dump_capture"
@@ -239,5 +245,8 @@ class BrainDumpService : Service() {
                 Intent(context, BrainDumpService::class.java).setAction(ACTION_STOP)
             )
         }
+
+        /** Accurate for this app because the service and activity share one process. */
+        fun isActiveInProcess(): Boolean = activeInProcess
     }
 }

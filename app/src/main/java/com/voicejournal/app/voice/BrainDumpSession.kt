@@ -43,6 +43,10 @@ object BrainDumpSession {
         preferences(context).edit().remove(LEGACY_TRANSCRIPT_KEY).apply()
     }
 
+    fun markNotRunning(context: Context, status: String) {
+        updateServiceState(context, isRunning = false, status = status)
+    }
+
     internal fun appendTranscript(context: Context, text: String): String {
         val cleanText = text.trim()
         if (cleanText.isEmpty()) {

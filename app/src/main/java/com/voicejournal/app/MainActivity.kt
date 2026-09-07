@@ -108,7 +108,7 @@ class MainActivity : Activity() {
 
         noteStore = NoteStore(applicationContext)
         noteStore.ensureDefaultJournal()
-        brainDumpTranscript = BrainDumpSession.read(this).transcript
+        brainDumpTranscript = readCurrentBrainDumpState().transcript
 
         root = FrameLayout(this).apply {
             setBackgroundColor(paper)
@@ -1040,7 +1040,7 @@ class MainActivity : Activity() {
         screen = Screen.BRAIN_DUMP
         root.removeAllViews()
 
-        val session = BrainDumpSession.read(this)
+        val session = readCurrentBrainDumpState()
         brainDumpTranscript = session.transcript
 
         val content = verticalLayout().apply {
@@ -1152,7 +1152,7 @@ class MainActivity : Activity() {
             )
         )
         renderBrainDumpTranscript()
-        if (autoStart && !session.isRunning) {
+        if (autoStart) {
             root.post { beginVoice(VoiceTarget.BRAIN_DUMP) }
         }
     }
@@ -1207,6 +1207,11 @@ class MainActivity : Activity() {
     }
 
     private fun beginVoice(target: VoiceTarget) {
+        if (target != VoiceTarget.BRAIN_DUMP && BrainDumpSession.isRunning(this)) {
+            showVoiceStatus("Brain Dump is using the microphone. Stop it before other voice input.")
+            toast("Stop Brain Dump first")
+            return
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -1316,6 +1321,7 @@ class MainActivity : Activity() {
         )
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     @Suppress("DEPRECATION")
     private fun registerBrainDumpReceiver() {
         if (brainDumpReceiverRegistered) {
@@ -1339,7 +1345,7 @@ class MainActivity : Activity() {
     }
 
     private fun syncBrainDumpState(partial: String = "") {
-        val state = BrainDumpSession.read(this)
+        val state = readCurrentBrainDumpState()
         brainDumpTranscript = state.transcript
         if (screen != Screen.BRAIN_DUMP) {
             return
@@ -1355,6 +1361,19 @@ class MainActivity : Activity() {
             }
         )
         showVoicePartial(partial)
+    }
+
+    private fun readCurrentBrainDumpState(): BrainDumpSession.State {
+        val state = BrainDumpSession.read(this)
+        if (!state.isRunning || BrainDumpService.isActiveInProcess()) {
+            return state
+        }
+
+        BrainDumpSession.markNotRunning(
+            this,
+            "Brain Dump is not running. Tap Start to continue."
+        )
+        return BrainDumpSession.read(this)
     }
 
     private fun handleFinalVoiceText(transcript: String) {

@@ -33,6 +33,7 @@ class VoiceInputController(
     private val singleSegments = VoiceSegmentAccumulator()
     private var recognizer: SpeechRecognizer? = null
     private var mode: VoiceSessionMode? = null
+    private var brainDumpPartial = ""
     private var segmentFinalized = false
     private var singleCompletionPending = false
     private var restartAttempts = 0
@@ -64,10 +65,16 @@ class VoiceInputController(
                 return@onMain
             }
 
+            val pendingBrainDumpText = brainDumpPartial.trim()
             mode = null
             handler.removeCallbacksAndMessages(null)
             recognizer?.cancel()
             releaseRecognizer()
+            brainDumpPartial = ""
+            onPartial("")
+            if (pendingBrainDumpText.isNotBlank()) {
+                onFinal(pendingBrainDumpText)
+            }
             onStatus("Voice input stopped")
         }
     }
@@ -78,6 +85,7 @@ class VoiceInputController(
             handler.removeCallbacksAndMessages(null)
             singleCompletionPending = false
             singleSegments.reset()
+            brainDumpPartial = ""
             releaseRecognizer()
         }
     }
@@ -87,6 +95,7 @@ class VoiceInputController(
         handler.removeCallbacksAndMessages(null)
         singleCompletionPending = false
         singleSegments.reset()
+        brainDumpPartial = ""
         releaseRecognizer()
 
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
@@ -121,7 +130,7 @@ class VoiceInputController(
         runCatching {
             recognizer?.startListening(recognitionIntent())
         }.onFailure {
-            finishWithError("Speech recognition is busy. Please try again.")
+            retryAfterTransientFailure("Speech recognition is busy. Retrying…")
         }
     }
 
@@ -192,15 +201,10 @@ class VoiceInputController(
 
         val isSilence = error == SpeechRecognizer.ERROR_NO_MATCH ||
             error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-        val shouldRestart = mode == VoiceSessionMode.BRAIN_DUMP &&
-            isSilence
-
-        if (shouldRestart) {
-            restartAttempts += 1
+        if (mode == VoiceSessionMode.BRAIN_DUMP && isSilence) {
+            restartAttempts = 0
             onStatus("No words heard. Listening again…")
-            scheduleRestart(
-                (RESTART_DELAY_MS * restartAttempts).coerceAtMost(MAX_RESTART_DELAY_MS)
-            )
+            scheduleRestart(RESTART_DELAY_MS)
         } else if (
             mode == VoiceSessionMode.SINGLE_NOTE &&
             isSilence &&
@@ -213,6 +217,8 @@ class VoiceInputController(
                 scheduleSingleCompletion()
             }
             scheduleRestart(RESTART_DELAY_MS)
+        } else if (isTransientError(error)) {
+            retryAfterTransientFailure("Speech recognition paused. Retrying…")
         } else {
             finishWithError(message)
         }
@@ -230,12 +236,14 @@ class VoiceInputController(
             ?.trim()
             .orEmpty()
 
-        if (transcript.isNotBlank()) {
+        val receivedNewText = transcript.isNotBlank()
+        if (receivedNewText) {
             restartAttempts = 0
             if (mode == VoiceSessionMode.SINGLE_NOTE) {
                 singleSegments.addFinal(transcript)
                 onPartial(singleSegments.finalText)
             } else {
+                brainDumpPartial = ""
                 onPartial("")
                 onFinal(transcript)
             }
@@ -246,7 +254,9 @@ class VoiceInputController(
             scheduleRestart(RESTART_DELAY_MS)
         } else if (singleSegments.hasFinalText) {
             onStatus(singlePauseStatus())
-            scheduleSingleCompletion()
+            if (receivedNewText || !singleCompletionPending) {
+                scheduleSingleCompletion()
+            }
             scheduleRestart(RESTART_DELAY_MS)
         } else {
             mode = null
@@ -271,6 +281,7 @@ class VoiceInputController(
             }
             onPartial(singleSegments.previewText)
         } else {
+            brainDumpPartial = partial
             onPartial(partial)
         }
     }
@@ -301,6 +312,49 @@ class VoiceInputController(
             singleCompletionPending = false
         }
     }
+
+    private fun retryAfterTransientFailure(status: String) {
+        val activeMode = mode ?: return
+        if (activeMode == VoiceSessionMode.BRAIN_DUMP && brainDumpPartial.isNotBlank()) {
+            val recoveredText = brainDumpPartial
+            brainDumpPartial = ""
+            onPartial("")
+            onFinal(recoveredText)
+        }
+
+        restartAttempts += 1
+        val retryDelay = (RESTART_DELAY_MS * restartAttempts)
+            .coerceAtMost(MAX_RESTART_DELAY_MS)
+        if (!recreateRecognizerForRetry()) {
+            finishWithError("The phone could not restart speech recognition.")
+            return
+        }
+
+        onStatus(status)
+        if (
+            activeMode == VoiceSessionMode.SINGLE_NOTE &&
+            singleSegments.hasFinalText &&
+            !singleCompletionPending
+        ) {
+            scheduleSingleCompletion()
+        }
+        scheduleRestart(retryDelay)
+    }
+
+    private fun recreateRecognizerForRetry(): Boolean {
+        val preferOnDevice = usingOnDeviceRecognizer && !standardFallbackAttempted
+        releaseRecognizer()
+        val replacement = createRecognizer(preferOnDevice) ?: return false
+        recognizer = replacement
+        recognizer?.setRecognitionListener(this)
+        segmentFinalized = true
+        return true
+    }
+
+    private fun isTransientError(error: Int): Boolean =
+        error != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS &&
+            error != SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED &&
+            error != SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
 
     private fun completeSingle(includePartial: Boolean, stoppedByUser: Boolean = false) {
         if (mode != VoiceSessionMode.SINGLE_NOTE) {
@@ -334,6 +388,7 @@ class VoiceInputController(
         handler.removeCallbacksAndMessages(null)
         singleCompletionPending = false
         singleSegments.reset()
+        brainDumpPartial = ""
         releaseRecognizer()
         onFailure(message)
     }
@@ -398,11 +453,11 @@ class VoiceInputController(
     }
 
     private companion object {
-        const val RESTART_DELAY_MS = 450L
+        const val RESTART_DELAY_MS = 250L
         const val MAX_RESTART_DELAY_MS = 3_000L
         const val SINGLE_COMPLETION_GRACE_MS = 4_000L
-        const val POSSIBLY_COMPLETE_SILENCE_MS = 2_500L
-        const val COMPLETE_SILENCE_MS = 4_000L
+        const val POSSIBLY_COMPLETE_SILENCE_MS = 1_500L
+        const val COMPLETE_SILENCE_MS = 2_500L
     }
 }
 
