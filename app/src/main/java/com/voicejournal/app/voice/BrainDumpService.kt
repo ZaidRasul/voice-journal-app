@@ -92,7 +92,7 @@ class BrainDumpService : Service() {
             status = initialStatus
         )
         publishUpdate()
-        voiceInput.startRant()
+        voiceInput.startBrainDump()
     }
 
     private fun stopSession(status: String) {
@@ -122,7 +122,7 @@ class BrainDumpService : Service() {
         BrainDumpSession.updateServiceState(
             applicationContext,
             isRunning = true,
-            status = status.replace("Rant mode", "Brain Dump")
+            status = status
         )
         publishUpdate()
     }

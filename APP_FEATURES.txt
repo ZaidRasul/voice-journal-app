@@ -25,8 +25,9 @@ What users can do
 5. Reorder or remove individual entries while editing.
 6. Tap “Speak to this journal” to dictate into the journal currently open.
 7. Tap “Voice command” on the Journals screen to route speech to a named journal.
-8. Use Rant mode for a live, continuously appended transcript. Rant mode never
-   interprets speech as a command. Its text can be saved as a normal journal.
+8. Use Brain Dump for a live, continuously appended transcript. Brain Dump never
+   interprets speech as a command. It keeps listening in the background until
+   the user taps Stop, and its text can be saved as a normal journal.
 9. Search journal names and entry text from the Journals screen.
 10. Every journal entry carries its own creation date and time.
 11. Ask to retrieve a journal or analyze its numeric entries:
@@ -44,13 +45,18 @@ The clearest global command format is:
 
   add to Groceries: checkbox milk
   add to Weight log: numbered 72 kilograms
+  add to Weight 72 kilograms
   put buy basil in Groceries
   append remember the meeting into Work
 
 The words “checkbox”, “bullet”, “numbered”, and “text” at the start of the
 content choose a block type. Content without one of those words becomes a plain
-text entry. If a named journal does not exist, Voice Journal creates it, then adds
-the dictated block.
+text entry. Target-first commands without a colon are matched against all journal
+names currently stored on the phone. If a colon-labelled named journal does not
+exist, Voice Journal creates it, then adds the dictated block. Command capture
+waits about four seconds after the latest recognized phrase, so a short thinking
+pause does not submit an incomplete command. Incomplete or unresolved command
+phrases are not saved into Default Journal.
 
 Daily and weekly list ideas
 ---------------------------
@@ -65,7 +71,9 @@ Only text is saved; the app does not record or keep raw audio. The installed
 Android speech service performs recognition. The app prefers on-device
 recognition where the phone supports it, but some devices may use their chosen
 speech service and network. Microphone access is requested only after the user
-taps a voice control. Rant mode stops when the app leaves the foreground.
+taps a voice control. Ordinary commands stop when complete or when the app leaves
+the foreground. Brain Dump uses an Android microphone foreground service, keeps
+an ongoing notification with a Stop action, and continues until the user stops it.
 
 Storage and size
 ----------------

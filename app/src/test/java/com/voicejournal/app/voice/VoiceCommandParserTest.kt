@@ -54,6 +54,19 @@ class VoiceCommandParserTest {
     }
 
     @Test
+    fun targetFirstJournalWinsWhenEntryContainsTheWordTo() {
+        val result = VoiceCommandParser.resolve(
+            spoken = "add to Weight walked to work",
+            knownJournalTitles = listOf("Weight")
+        )
+
+        assertTrue(result is VoiceCommandResolution.Complete)
+        val command = (result as VoiceCommandResolution.Complete).command
+        assertEquals("Weight", command.noteTitle)
+        assertEquals("walked to work", command.block.text)
+    }
+
+    @Test
     fun targetFirstCommandCanCreateTypedEntry() {
         val result = VoiceCommandParser.resolve(
             spoken = "add to weight checkbox record morning weight",

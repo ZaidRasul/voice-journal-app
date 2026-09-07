@@ -13,7 +13,7 @@ import java.util.Locale
 
 enum class VoiceSessionMode {
     SINGLE_NOTE,
-    RANT
+    BRAIN_DUMP
 }
 
 /**
@@ -53,8 +53,8 @@ class VoiceInputController(
         onMain { start(VoiceSessionMode.SINGLE_NOTE) }
     }
 
-    fun startRant() {
-        onMain { start(VoiceSessionMode.RANT) }
+    fun startBrainDump() {
+        onMain { start(VoiceSessionMode.BRAIN_DUMP) }
     }
 
     fun stop() {
@@ -192,7 +192,7 @@ class VoiceInputController(
 
         val isSilence = error == SpeechRecognizer.ERROR_NO_MATCH ||
             error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-        val shouldRestart = mode == VoiceSessionMode.RANT &&
+        val shouldRestart = mode == VoiceSessionMode.BRAIN_DUMP &&
             isSilence
 
         if (shouldRestart) {
@@ -209,7 +209,9 @@ class VoiceInputController(
             singleSegments.updatePartial("")
             onPartial(singleSegments.finalText)
             onStatus(singlePauseStatus())
-            scheduleSingleCompletion()
+            if (!singleCompletionPending) {
+                scheduleSingleCompletion()
+            }
             scheduleRestart(RESTART_DELAY_MS)
         } else {
             finishWithError(message)
@@ -239,7 +241,7 @@ class VoiceInputController(
             }
         }
 
-        if (mode == VoiceSessionMode.RANT) {
+        if (mode == VoiceSessionMode.BRAIN_DUMP) {
             onStatus("Saved that thought. Listening again…")
             scheduleRestart(RESTART_DELAY_MS)
         } else if (singleSegments.hasFinalText) {
@@ -315,8 +317,8 @@ class VoiceInputController(
         onPartial("")
 
         if (transcript.isNotBlank()) {
-            onFinal(transcript)
             onStatus(if (stoppedByUser) "Voice input stopped and saved" else "Voice input complete")
+            onFinal(transcript)
         } else {
             onStatus("Voice input stopped")
         }
@@ -375,7 +377,7 @@ class VoiceInputController(
     }
 
     private fun listeningStatus(): String = when (mode) {
-        VoiceSessionMode.RANT -> "Brain Dump is listening…"
+        VoiceSessionMode.BRAIN_DUMP -> "Brain Dump is listening…"
         VoiceSessionMode.SINGLE_NOTE -> if (singleSegments.hasFinalText) {
             singlePauseStatus()
         } else {

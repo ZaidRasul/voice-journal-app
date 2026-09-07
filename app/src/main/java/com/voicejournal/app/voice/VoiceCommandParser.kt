@@ -87,21 +87,24 @@ object VoiceCommandParser {
         spoken: String,
         knownJournalTitles: Collection<String>
     ): VoiceCommandResolution {
-        parse(spoken)?.let { parsed ->
-            val canonicalTitle = knownTitleAliases(knownJournalTitles)
-                .firstOrNull { it.spokenAlias.equals(parsed.noteTitle, ignoreCase = true) }
-                ?.canonicalTitle
+        val titleAliases = knownTitleAliases(knownJournalTitles)
+
+        // A colon makes the title/content boundary explicit and may name a new journal.
+        if (labelledFormat.matches(spoken)) {
+            val parsed = parse(spoken) ?: return VoiceCommandResolution.NotACommand
             return VoiceCommandResolution.Complete(
-                if (canonicalTitle == null) parsed else parsed.copy(noteTitle = canonicalTitle)
+                parsed.withCanonicalTitle(titleAliases)
             )
         }
 
         val prefix = targetFirstPrefix.find(spoken)
             ?.takeIf { it.range.first == 0 }
-            ?: return VoiceCommandResolution.NotACommand
+        if (prefix == null) {
+            val parsed = parse(spoken) ?: return VoiceCommandResolution.NotACommand
+            return VoiceCommandResolution.Complete(parsed.withCanonicalTitle(titleAliases))
+        }
         val afterPrefix = spoken.substring(prefix.range.last + 1)
 
-        val titleAliases = knownTitleAliases(knownJournalTitles)
         val candidateRemainders = buildList {
             add(afterPrefix)
             leadingJournalDescriptor.find(afterPrefix)?.let { descriptor ->
@@ -153,21 +156,31 @@ object VoiceCommandParser {
         val isExact: Boolean
     )
 
+    private fun VoiceNoteCommand.withCanonicalTitle(
+        aliases: List<KnownTitleAlias>
+    ): VoiceNoteCommand {
+        val canonicalTitle = aliases
+            .firstOrNull { it.spokenAlias.equals(noteTitle, ignoreCase = true) }
+            ?.canonicalTitle
+        return if (canonicalTitle == null) this else copy(noteTitle = canonicalTitle)
+    }
+
     private fun knownTitleAliases(titles: Collection<String>): List<KnownTitleAlias> =
         buildList {
             titles.forEach { rawTitle ->
-                val title = rawTitle.cleanTitle()
+                val canonicalTitle = rawTitle.trim()
+                val title = canonicalTitle.cleanTitle()
                 if (title.isBlank()) return@forEach
-                add(KnownTitleAlias(title, title, isExact = true))
+                add(KnownTitleAlias(canonicalTitle, title, isExact = true))
 
                 val withoutJournal = title.replace(
                     Regex("""\s+journal$""", RegexOption.IGNORE_CASE),
                     ""
                 )
                 if (withoutJournal != title && withoutJournal.isNotBlank()) {
-                    add(KnownTitleAlias(title, withoutJournal, isExact = false))
+                    add(KnownTitleAlias(canonicalTitle, withoutJournal, isExact = false))
                 } else {
-                    add(KnownTitleAlias(title, "$title Journal", isExact = false))
+                    add(KnownTitleAlias(canonicalTitle, "$title Journal", isExact = false))
                 }
             }
         }

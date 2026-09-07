@@ -126,6 +126,7 @@ class MainActivity : Activity() {
 
         configureBackNavigation()
         if (intent.getBooleanExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP, false)) {
+            intent.removeExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP)
             showBrainDumpScreen()
         } else {
             restoreScreen(savedInstanceState)
@@ -152,6 +153,7 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent?.getBooleanExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP, false) == true) {
+            intent.removeExtra(BrainDumpSession.EXTRA_OPEN_BRAIN_DUMP)
             showBrainDumpScreen()
         }
     }
